@@ -72,13 +72,47 @@ class DepthMap {
   /// Whether [metricGain]/[metricBias] were actually estimated from data.
   final bool isFitted;
 
-  bool get isUsable => globalConfidence > 0 && width > 1 && height > 1;
+  /// The map holds real values (as opposed to the 1x1 placeholder produced
+  /// when no depth model is installed).
+  bool get hasData => width > 1 && height > 1;
 
+  /// The map holds real values *and* is trusted enough to read from. A
+  /// relative map that has not been fitted to metric scale has data but is
+  /// not usable, which is precisely the state [fitToMetric] exists to leave.
+  bool get isUsable => hasData && globalConfidence > 0;
+
+  /// Bilinearly sampled raw value at a normalised image point.
+  ///
+  /// A depth map is typically a quarter of the frame's resolution or less, so
+  /// nearest-neighbour sampling quantises range by metres at 20 m and more
+  /// beyond that. Interpolating costs three extra multiplies and removes that
+  /// error entirely.
   double rawAt(double nx, double ny) {
-    final int x = (nx * width).round().clamp(0, width - 1);
-    final int y = (ny * height).round().clamp(0, height - 1);
-    return values[y * width + x];
+    final double fx = (nx * width - 0.5).clamp(0.0, width - 1.0);
+    final double fy = (ny * height - 0.5).clamp(0.0, height - 1.0);
+    final int x0 = fx.floor();
+    final int y0 = fy.floor();
+    final int x1 = math.min(x0 + 1, width - 1);
+    final int y1 = math.min(y0 + 1, height - 1);
+    final double tx = fx - x0;
+    final double ty = fy - y0;
+
+    final double v00 = values[y0 * width + x0];
+    final double v01 = values[y0 * width + x1];
+    final double v10 = values[y1 * width + x0];
+    final double v11 = values[y1 * width + x1];
+    if (!v00.isFinite || !v01.isFinite || !v10.isFinite || !v11.isFinite) {
+      return values[y0 * width + x0];
+    }
+
+    final double top = v00 + (v01 - v00) * tx;
+    final double bottom = v10 + (v11 - v10) * tx;
+    return top + (bottom - top) * ty;
   }
+
+  /// Nearest-neighbour access by integer grid coordinates.
+  double rawAtCell(int x, int y) =>
+      values[y.clamp(0, height - 1) * width + x.clamp(0, width - 1)];
 
   /// Median raw value over a normalised region. The median rejects the
   /// halo of background pixels that a bounding box inevitably includes.
