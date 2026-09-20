@@ -113,8 +113,9 @@ enum ObjectClass {
         ObjectClass.unknown => 0.60,
       };
 
-  /// Extra longitudinal clearance the planner keeps, metres. Vulnerable road
-  /// users get more because their next move is far less predictable.
+  /// Extra **longitudinal** clearance the planner keeps, metres — how much
+  /// further back to stop. Vulnerable road users get more because their next
+  /// move is far less predictable.
   double get safetyMarginMeters => switch (this) {
         ObjectClass.person => 2.5,
         ObjectClass.animal => 2.5,
@@ -123,6 +124,29 @@ enum ObjectClass {
         ObjectClass.truck => 1.5,
         ObjectClass.bus => 1.5,
         _ => 1.0,
+      };
+
+  /// Extra **lateral** clearance when passing, metres, on top of both bodies'
+  /// half-widths.
+  ///
+  /// Deliberately much smaller than [safetyMarginMeters]: these are different
+  /// quantities and conflating them is a real modelling error. Using the
+  /// longitudinal figure laterally would demand ~2.7 m of side clearance for
+  /// a cyclist, which no 3.5 m lane can provide — the planner would declare
+  /// every cyclist impassable instead of moving over and passing, which is
+  /// both wrong and, on a real road, worse.
+  ///
+  /// The figures below follow common passing-distance guidance: about a metre
+  /// for a pedestrian or cyclist, less for a boxed-in vehicle whose position
+  /// is much more predictable.
+  double get lateralSafetyMarginMeters => switch (this) {
+        ObjectClass.person => 1.0,
+        ObjectClass.animal => 1.0,
+        ObjectClass.bicycle => 0.85,
+        ObjectClass.motorcycle => 0.85,
+        ObjectClass.trafficCone => 0.3,
+        ObjectClass.roadDebris => 0.4,
+        _ => 0.35,
       };
 
   /// Plausible maximum speed, m/s. Used to reject absurd velocity estimates

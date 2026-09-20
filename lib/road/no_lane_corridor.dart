@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../core/geometry.dart';
+import '../navigation/maneuver.dart';
 import '../perception/object_class.dart';
 import '../tracking/object_track.dart';
 import 'lane.dart';
@@ -59,33 +60,6 @@ class CorridorEstimate {
         'maxRange': double.parse(maxRangeMeters.toStringAsFixed(1)),
         'conf': double.parse(confidence.toStringAsFixed(3)),
         'evidence': evidence.map((CorridorEvidence e) => e.name).toList(),
-      };
-}
-
-/// High-level route intent from navigation. Navigation never steers directly;
-/// it only biases which way the corridor is expected to go.
-enum ManeuverIntent {
-  straight('STRAIGHT'),
-  turnLeft('TURN_LEFT'),
-  turnRight('TURN_RIGHT'),
-  keepLeft('KEEP_LEFT'),
-  keepRight('KEEP_RIGHT'),
-  exit('EXIT'),
-  unknown('UNKNOWN');
-
-  const ManeuverIntent(this.label);
-  final String label;
-
-  /// Sign of the lateral bias this intent implies. Deliberately small in
-  /// magnitude: navigation knows the topology of the road network, not where
-  /// the tarmac is.
-  double get lateralBiasSign => switch (this) {
-        ManeuverIntent.turnLeft || ManeuverIntent.keepLeft => -1,
-        ManeuverIntent.turnRight ||
-        ManeuverIntent.keepRight ||
-        ManeuverIntent.exit =>
-          1,
-        _ => 0,
       };
 }
 
