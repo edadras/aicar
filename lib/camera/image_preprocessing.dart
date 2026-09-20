@@ -309,7 +309,12 @@ class ImagePreprocessing {
     double sumB = 0;
     int wB = 0;
     double maxVar = -1;
-    int threshold = 128;
+    // With a strongly bimodal histogram every threshold between the two peaks
+    // is equally optimal, and taking the first one puts the threshold exactly
+    // on the darker peak — which then classifies none of those pixels as ink.
+    // Track the whole plateau and take its midpoint.
+    int plateauStart = 128;
+    int plateauEnd = 128;
     for (int t = 0; t < 256; t++) {
       wB += hist[t];
       if (wB == 0) continue;
@@ -321,10 +326,13 @@ class ImagePreprocessing {
       final double between = wB * wF * (mB - mF) * (mB - mF);
       if (between > maxVar) {
         maxVar = between;
-        threshold = t;
+        plateauStart = t;
+        plateauEnd = t;
+      } else if (between == maxVar) {
+        plateauEnd = t;
       }
     }
-    return threshold;
+    return (plateauStart + plateauEnd) ~/ 2;
   }
 
   /// Mean luminance over a sub-rectangle — used to detect night conditions and
