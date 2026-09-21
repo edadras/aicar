@@ -44,6 +44,22 @@ limitations under the License.
 
 ---
 
+## EfficientDet-Lite2 (object detection)
+
+* **File:** `efficientdet_lite2.tflite`
+* **SHA-256:** `6fd32c84ab1eb0f7e7f3a7a20a20d7df1530daa8378728f7c79571096286bd52`
+* **Size:** 7,557,887 bytes
+* **Source:** TensorFlow Hub —
+  `https://tfhub.dev/tensorflow/lite-model/efficientdet/lite2/detection/metadata/1`
+* **Copyright:** Copyright 2020 The TensorFlow Authors. All Rights Reserved.
+* **Licence:** Apache License, Version 2.0
+
+Same architecture, head and label map as Lite0, at 448x448 instead of
+320x320. Shipped as the accuracy option; not the default, because the extra
+compute is also extra heat.
+
+---
+
 ## Models the app can run but does not bundle
 
 Listed here so the licensing position is unambiguous for anyone building a
@@ -55,7 +71,7 @@ the one you actually install.
 |---|---|---|
 | YOLOv8n / YOLOv8s / YOLO11n (Ultralytics) | AGPL-3.0 | **No** — would relicense the whole app |
 | SSD MobileNet V2 (TF OD API) | Apache-2.0 | Yes |
-| MiDaS v2.1 small (Intel ISL) | MIT | Yes |
+| MiDaS v2.1 small (Intel ISL) | MIT | Yes, but 63 MB — offered as an in-app download instead |
 | Depth Anything V2 small | Apache-2.0 | Yes |
 | Ultra-Fast-Lane-Detection v2 | MIT | Yes |
 | SegFormer-B0 (NVIDIA) | NVIDIA Source Code Licence — non-commercial | **No** for a commercial build |

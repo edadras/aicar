@@ -2,15 +2,27 @@
 
 ## What ships in the APK
 
-| File | Role | Input | Size | Licence |
-|---|---|---|---|---|
-| `efficientdet_lite0.tflite` | Object detection | 320×320 uint8 | 4.6 MB | Apache-2.0 |
+| File | Role | Input | Size | Licence | |
+|---|---|---|---|---|---|
+| `efficientdet_lite0.tflite` | Object detection | 320×320 uint8 | 4.6 MB | Apache-2.0 | default |
+| `efficientdet_lite2.tflite` | Object detection | 448×448 uint8 | 7.6 MB | Apache-2.0 | accuracy option |
 
-That is the only model bundled. It is enough for the app to detect vehicles,
+Lite2 is the better detector and is **not** the default: 448×448 is roughly
+twice the compute of 320×320, and on a phone clamped to a windscreen that
+difference shows up as thermal throttling rather than as better detections.
+Choose it deliberately on the AI models screen and watch the thermal readout.
+
+Those are the only models bundled. It is enough for the app to detect vehicles,
 pedestrians, cyclists, motorcycles and traffic lights the first time it is
 launched, with nothing to download. Every other role (depth, lane, road
 segmentation, sign classification) runs its classical fallback until a model
 is installed — see `docs/MODELS.md`.
+
+Models too large to bundle are offered as an **in-app download** instead:
+MiDaS v2.1 small is 63 MB, which would more than triple the APK for a
+capability most drives do not need. The AI models screen shows the size and
+the licence, asks before fetching anything, and verifies the SHA-256 before
+installing it.
 
 ## Why EfficientDet-Lite0 and not YOLO
 

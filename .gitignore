@@ -57,6 +57,7 @@ assets/labels/*.txt
 # perception. Apache-2.0; provenance in assets/models/NOTICE.md. Anything
 # else added here must clear the same licence bar before being un-ignored.
 !assets/models/efficientdet_lite0.tflite
+!assets/models/efficientdet_lite2.tflite
 
 # Recorded drive sessions
 /recordings/

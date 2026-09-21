@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../ai/inference_backend.dart';
 import '../../ai/model_catalog.dart';
 import '../../ai/model_descriptor.dart';
+import '../../ai/model_downloader.dart';
 import '../../ai/model_registry.dart';
 import '../driving_session.dart';
 import '../theme.dart';
@@ -31,6 +32,88 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
   List<String> _delegates = const <String>[];
   bool _backendAvailable = false;
   bool _busy = false;
+
+  ModelDownloader? _downloader;
+  ModelDownloadProgress? _progress;
+  String? _downloadError;
+
+  @override
+  void dispose() {
+    _downloader?.dispose();
+    super.dispose();
+  }
+
+  /// Fetch a model the app does not ship.
+  ///
+  /// Confirmed first, every time. A download here is tens of megabytes of
+  /// the user's data and, once it is running, a permanent share of their
+  /// battery and thermal budget — none of which should start because a card
+  /// was tapped.
+  Future<void> _download(ModelDescriptor d) async {
+    final DrivingSession session = context.read<DrivingSession>();
+    final double mb = (d.sizeBytes ?? 0) / 1024 / 1024;
+    final bool? go = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('Download ${d.name}?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('${mb.toStringAsFixed(0)} MB over your connection.'),
+            const SizedBox(height: 8),
+            if (d.licence != null) Text('Licence: ${d.licence}'),
+            const SizedBox(height: 8),
+            if (d.notes != null)
+              Text(d.notes!, style: HudTheme.caption),
+            const SizedBox(height: 8),
+            const Text(
+              'Running a larger model costs battery and thermal headroom, '
+              'and on a hot dashboard that shows up as a lower frame rate.',
+              style: HudTheme.caption,
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Download'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    final ModelDownloader downloader =
+        _downloader ??= ModelDownloader(registry: session.registry);
+    setState(() {
+      _downloadError = null;
+      _progress = ModelDownloadProgress(
+        modelId: d.id,
+        receivedBytes: 0,
+        totalBytes: d.sizeBytes ?? 0,
+      );
+    });
+
+    try {
+      await downloader.download(
+        d,
+        onProgress: (ModelDownloadProgress p) {
+          if (mounted) setState(() => _progress = p);
+        },
+      );
+      await session.rebuildPipeline();
+      if (mounted) await _refresh();
+    } catch (e) {
+      if (mounted) setState(() => _downloadError = '$e');
+    } finally {
+      if (mounted) setState(() => _progress = null);
+    }
+  }
 
   @override
   void initState() {
@@ -195,6 +278,14 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
           ),
 
           const SectionHeader('Known models'),
+          if (_downloadError != null)
+            Card(
+              color: HudTheme.critical.withValues(alpha: 0.12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_downloadError!, style: HudTheme.caption),
+              ),
+            ),
           for (final ModelDescriptor d in ModelCatalog.all.values)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
@@ -215,10 +306,18 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
                     '${d.role.label} · '
                     '${d.isBundledAsset ? 'ships with the app' : 'expects '
                         '${d.assetOrFilePath.split('/').last}'}'
+                    '${d.licence == null ? '' : ' · ${d.licence}'}'
                     '${d.notes == null ? '' : '\n${d.notes}'}',
                     style: HudTheme.caption,
                   ),
                   isThreeLine: d.notes != null,
+                  trailing: _downloadTrailingFor(
+                    context: context,
+                    d: d,
+                    installed: session.registry.installed.containsKey(d.id),
+                    progress: _progress,
+                    onDownload: () => _download(d),
+                  ),
                 ),
               ),
             ),
@@ -226,6 +325,46 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
       ),
     );
   }
+}
+
+/// The download control for one catalogue row, or nothing when the model is
+/// already present or cannot be fetched.
+Widget? _downloadTrailingFor({
+  required BuildContext context,
+  required ModelDescriptor d,
+  required bool installed,
+  required ModelDownloadProgress? progress,
+  required VoidCallback onDownload,
+}) {
+  if (installed || !d.isDownloadable) return null;
+  if (progress != null && progress.modelId == d.id) {
+    return SizedBox(
+      width: 92,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: <Widget>[
+          LinearProgressIndicator(value: progress.fraction),
+          const SizedBox(height: 4),
+          Text(
+            progress.stage == 'downloading'
+                ? progress.label
+                : progress.stage,
+            style: HudTheme.caption.copyWith(fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+  return TextButton.icon(
+    onPressed: progress == null ? onDownload : null,
+    icon: const Icon(Icons.download, size: 16),
+    label: Text(
+      d.sizeBytes == null
+          ? 'Get'
+          : '${(d.sizeBytes! / 1024 / 1024).round()} MB',
+    ),
+  );
 }
 
 class _RoleCard extends StatelessWidget {

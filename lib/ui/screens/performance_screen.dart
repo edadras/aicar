@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../camera/camera_service.dart';
 import '../../core/profiling.dart';
 import '../../debug/system_monitor.dart';
+import '../../pipeline/thermal_governor.dart';
 import '../driving_session.dart';
 import '../theme.dart';
 
@@ -79,6 +80,95 @@ class PerformanceScreen extends StatelessWidget {
               ),
 
               const SectionHeader(
+                'Thermal governor',
+                subtitle: 'What the stack is allowed to do right now, and why',
+              ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Builder(builder: (BuildContext context) {
+                    final PerformancePlan? plan =
+                        session.latest?.performance;
+                    if (plan == null) {
+                      return const Text(
+                        'No cycle has run yet.',
+                        style: HudTheme.caption,
+                      );
+                    }
+                    final Color colour = switch (plan.level) {
+                      PerformanceLevel.full => HudTheme.accent,
+                      PerformanceLevel.reduced => HudTheme.info,
+                      PerformanceLevel.conservative => HudTheme.caution,
+                      PerformanceLevel.survival => HudTheme.critical,
+                    };
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Row(
+                          children: <Widget>[
+                            HudBadge(text: plan.level.label, color: colour),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                plan.level.description,
+                                style: HudTheme.caption,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(plan.reason, style: HudTheme.body),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: <Widget>[
+                            HudReadout(
+                              label: 'Allowed',
+                              value: plan.targetFps.toStringAsFixed(0),
+                              unit: 'fps',
+                            ),
+                            HudReadout(
+                              label: 'Achieved',
+                              value: plan.achievedFps.toStringAsFixed(1),
+                              unit: 'fps',
+                            ),
+                            HudReadout(
+                              label: 'Needed at this speed',
+                              value: plan.requiredFps.toStringAsFixed(1),
+                              unit: 'fps',
+                              valueColor: plan.isFrameRateInsufficient
+                                  ? HudTheme.critical
+                                  : HudTheme.accent,
+                            ),
+                          ],
+                        ),
+                        if (plan.isFrameRateInsufficient) ...<Widget>[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Below the rate this speed needs. The stack is '
+                            'looking at the road less than once every '
+                            '1.5 m, reports itself degraded, and the '
+                            'decision engine will not act confidently on '
+                            'what it sees.',
+                            style: HudTheme.caption
+                                .copyWith(color: HudTheme.critical),
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        Text(
+                          'Detection and tracking run on every accepted '
+                          'frame at every level. What the governor sheds is '
+                          'depth, segmentation, lanes, signs and markings — '
+                          'stages whose subject changes slowly.',
+                          style: HudTheme.caption,
+                        ),
+                      ],
+                    );
+                  }),
+                ),
+              ),
+
+              const SectionHeader(
                 'Device',
                 subtitle: 'On a dashboard in sunlight, heat is usually the '
                     'real limit',
@@ -120,6 +210,17 @@ class PerformanceScreen extends StatelessWidget {
                                     ? '—'
                                     : drain.toStringAsFixed(0),
                                 unit: '%/h',
+                              ),
+                              HudReadout(
+                                label: 'Headroom',
+                                value: sample.thermalHeadroom == null
+                                    ? '—'
+                                    : '${(sample.thermalHeadroom! * 100).round()}',
+                                unit: '%',
+                                valueColor:
+                                    (sample.thermalHeadroom ?? 0) >= 0.85
+                                        ? HudTheme.warning
+                                        : HudTheme.textPrimary,
                               ),
                               HudReadout(
                                 label: 'Thermal',

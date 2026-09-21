@@ -86,6 +86,7 @@ class ModelCatalog {
   static const String yolo11nId = 'yolo11n-640-fp16';
   static const String ssdMobileNetId = 'ssd-mobilenet-v2-int8';
   static const String efficientDetLite0Id = 'efficientdet-lite0-320-int8';
+  static const String efficientDetLite2Id = 'efficientdet-lite2-448-int8';
   static const String midasSmallId = 'midas-v2-small-256';
   static const String depthAnythingId = 'depth-anything-v2-small-518';
   static const String ufldId = 'ufld-v2-culane-800';
@@ -99,6 +100,7 @@ class ModelCatalog {
           yolov8s,
           yolo11n,
           efficientDetLite0,
+          efficientDetLite2,
           ssdMobileNet,
           midasSmall,
           depthAnythingSmall,
@@ -197,10 +199,45 @@ class ModelCatalog {
     labelVocabulary: 'coco',
     isBundledAsset: true,
     sizeBytes: 4563519,
+    licence: 'Apache-2.0 (Google / TensorFlow Hub)',
     notes: 'Ships with the app (Apache-2.0). ~20 ms per frame on a Galaxy '
         'S23 via NNAPI. Caps at 25 detections per frame and, at 320x320, '
         'loses small objects beyond roughly 60 m — install a larger detector '
         'for longer range.',
+  );
+
+  /// The accuracy option, also shipped in the APK.
+  ///
+  /// Same head and same label map as [efficientDetLite0], so it is a drop-in
+  /// swap — 448x448 instead of 320x320, which is most of where the extra
+  /// range comes from. On a reference photo it reads a bus at 0.89 against
+  /// Lite0's 0.80 and finds the same three people at 0.87/0.82/0.71 against
+  /// 0.80/0.71/0.67.
+  ///
+  /// It is **not** the default, because 448x448 is roughly twice the compute
+  /// and on a phone clamped to a windscreen in sun that difference is the
+  /// difference between a sustained frame rate and thermal throttling. Pick
+  /// it deliberately, and watch the thermal readout on the Performance
+  /// screen — which is also why the adaptive scheduler exists.
+  static const ModelDescriptor efficientDetLite2 = ModelDescriptor(
+    id: efficientDetLite2Id,
+    name: 'EfficientDet-Lite2 (COCO, 448, int8) — bundled',
+    role: ModelRole.objectDetection,
+    assetOrFilePath: 'assets/models/efficientdet_lite2.tflite',
+    inputWidth: 448,
+    inputHeight: 448,
+    outputFormat: ModelOutputFormat.ssdMobileNet,
+    labels: coco90Labels,
+    quantized: true,
+    scoreThreshold: 0.40,
+    delegate: InferenceDelegate.nnapi,
+    labelVocabulary: 'coco',
+    isBundledAsset: true,
+    sizeBytes: 7557887,
+    licence: 'Apache-2.0 (Google / TensorFlow Hub)',
+    notes: 'Ships with the app (Apache-2.0). Better range and small-object '
+        'recall than Lite0 at roughly double the compute and heat. Still '
+        'caps at 25 detections per frame.',
   );
 
   /// Flutter asset key of the bundled detector. Passed straight to the native
@@ -215,6 +252,7 @@ class ModelCatalog {
     name: 'SSD MobileNet V2 (COCO, 300, int8)',
     role: ModelRole.objectDetection,
     assetOrFilePath: 'ssd_mobilenet_v2_int8.tflite',
+    licence: 'Apache-2.0 (TensorFlow Object Detection API)',
     inputWidth: 300,
     inputHeight: 300,
     outputFormat: ModelOutputFormat.ssdMobileNet,
@@ -241,8 +279,17 @@ class ModelCatalog {
     inputStd: <double>[58.395, 57.12, 57.375],
     delegate: InferenceDelegate.gpu,
     extra: <String, dynamic>{'outputWidth': 256, 'outputHeight': 256},
+    sizeBytes: 66338288,
+    downloadUrl:
+        'https://tfhub.dev/intel/lite-model/midas/v2_1_small/1/lite/1'
+            '?lite-format=tflite',
+    downloadSha256:
+        '93d871071edff1218973ce25ee27ce95ccd20450c70a55e1b89efa3f5a772cdd',
+    licence: 'MIT (Intel ISL)',
     notes: 'Relative inverse depth. Requires ground-plane anchors to recover '
-        'metric scale — see DepthFusion.',
+        'metric scale — see DepthFusion. 63 MB and ~35 ms per frame, which '
+        'is why it is downloaded rather than bundled: it is a real thermal '
+        'cost and should be a deliberate choice.',
   );
 
   static const ModelDescriptor depthAnythingSmall = ModelDescriptor(

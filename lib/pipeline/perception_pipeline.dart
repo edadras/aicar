@@ -14,6 +14,7 @@ import '../camera/camera_frame.dart';
 import '../camera/image_preprocessing.dart';
 import '../core/logging.dart';
 import '../core/profiling.dart';
+import '../debug/system_monitor.dart';
 import '../decision/driving_decision.dart';
 import '../depth/depth_fusion.dart';
 import '../depth/depth_map.dart';
@@ -49,6 +50,7 @@ import '../world_model/world_model_builder.dart';
 import '../world_model/world_state.dart';
 import 'pipeline_config.dart';
 import 'pipeline_result.dart';
+import 'thermal_governor.dart';
 
 /// Runs the full perception → planning → decision → simulation cycle for one
 /// camera frame.
@@ -85,6 +87,7 @@ class PerceptionPipeline {
     RoadMarkingTracker? roadMarkingTracker,
     IntersectionDetector? intersectionDetector,
     TurnSignalPlanner? turnSignalPlanner,
+    ThermalGovernor? governor,
     SimulatedVehicleController? controller,
     KinematicBicycleModel? vehicleModel,
   })  : config = config ?? const PipelineConfig(),
@@ -106,6 +109,11 @@ class PerceptionPipeline {
         intersectionDetector =
             intersectionDetector ?? const IntersectionDetector(),
         turnSignalPlanner = turnSignalPlanner ?? TurnSignalPlanner(),
+        governor = governor ??
+            ThermalGovernor(
+              baseTargetFps:
+                  (config ?? const PipelineConfig()).camera.targetInferenceFps,
+            ),
         vehicleModel = vehicleModel ??
             KinematicBicycleModel(
               parameters: (config ?? const PipelineConfig()).vehicle,
@@ -144,6 +152,10 @@ class PerceptionPipeline {
   final RoadMarkingTracker roadMarkingTracker;
   final IntersectionDetector intersectionDetector;
   final TurnSignalPlanner turnSignalPlanner;
+
+  /// Decides how hard the pipeline may work given heat, battery and latency.
+  final ThermalGovernor governor;
+
   final SimulatedVehicleController controller;
   final KinematicBicycleModel vehicleModel;
 
@@ -175,6 +187,7 @@ class PerceptionPipeline {
     required CameraFrame frame,
     required EgoMotionState ego,
     RouteProgress? routeProgress,
+    SystemSample? systemSample,
   }) async {
     final int cycleStart = DateTime.now().microsecondsSinceEpoch;
     final List<String> degraded = <String>[];
@@ -192,6 +205,38 @@ class PerceptionPipeline {
     regulatoryTracker.advance(ego.speedMps, dt);
     _syncCalibration(frame);
 
+    // --- 0. how hard are we allowed to work this cycle? -------------------
+    //
+    // Evaluated before anything expensive runs, so the plan applies to this
+    // frame rather than the next one. The governor never switches object
+    // detection off; what it sheds is the slow-changing stages, and when even
+    // that is not enough it says the frame rate is insufficient rather than
+    // letting the stack report a confident view of a road it is barely
+    // looking at.
+    final PerformancePlan plan = governor.update(
+      system: systemSample,
+      achievedFps: profiler.processingFps,
+      speedMps: ego.speedMps,
+      pipelineP95Ms: profiler.stage(PipelineStageNames.total).p95Ms,
+      dtSeconds: dt,
+      baseCadence: config.cadence,
+      baseToggles: config.toggles,
+    );
+    final StageCadence cadence = plan.cadence;
+    final PipelineStageToggles toggles = plan.toggles;
+    // Only an insufficient *rate* counts as degraded perception. Running
+    // depth every sixth frame instead of every third costs confidence, which
+    // AutonomyConfidence already accounts for; it is not the stack saying it
+    // cannot see. Conflating the two would push the decision engine to
+    // UNCERTAIN the moment the phone warmed up, which would make the
+    // governor worse than useless.
+    if (plan.isFrameRateInsufficient) {
+      degraded.add(
+        'frame rate ${plan.achievedFps.toStringAsFixed(1)} FPS below the '
+        '${plan.requiredFps.toStringAsFixed(1)} FPS this speed needs',
+      );
+    }
+
     // --- 1. preprocessing metadata ---------------------------------------
     final double ambientLuminance = profiler.measure(
       PipelineStageNames.preprocess,
@@ -204,7 +249,7 @@ class PerceptionPipeline {
       timestampMicros: frame.timestampMicros,
       reason: 'object detection disabled',
     );
-    if (config.toggles.objectDetection) {
+    if (toggles.objectDetection) {
       detections = await profiler.measureAsync(
         PipelineStageNames.objectDetection,
         () => objectDetector.detect(frame),
@@ -218,7 +263,7 @@ class PerceptionPipeline {
 
     // --- 3. tracking -----------------------------------------------------
     List<ObjectTrack> tracks = const <ObjectTrack>[];
-    if (config.toggles.tracking) {
+    if (toggles.tracking) {
       tracks = profiler.measure(
         PipelineStageNames.tracking,
         () => tracker.update(
@@ -231,9 +276,9 @@ class PerceptionPipeline {
 
     // --- 4. segmentation --------------------------------------------------
     RoadSegmentation? segmentation = _lastSegmentation;
-    if (config.toggles.segmentation &&
-        config.cadence.shouldRun(
-          config.cadence.segmentationEveryNFrames,
+    if (toggles.segmentation &&
+        cadence.shouldRun(
+          cadence.segmentationEveryNFrames,
           _frameIndex,
         )) {
       final RoadSegmentation fresh = await profiler.measureAsync(
@@ -253,9 +298,9 @@ class PerceptionPipeline {
           frameId: frame.id,
           timestampMicros: frame.timestampMicros,
         );
-    if (config.toggles.laneDetection &&
-        config.cadence.shouldRun(
-          config.cadence.laneEveryNFrames,
+    if (toggles.laneDetection &&
+        cadence.shouldRun(
+          cadence.laneEveryNFrames,
           _frameIndex,
         )) {
       lanes = await profiler.measureAsync(
@@ -292,7 +337,7 @@ class PerceptionPipeline {
     }
 
     List<RoadEdge> roadEdges = const <RoadEdge>[];
-    if (config.toggles.roadEdges) {
+    if (toggles.roadEdges) {
       roadEdges = profiler.measure(
         PipelineStageNames.roadEdge,
         () => roadEdgeDetector.detect(
@@ -328,9 +373,9 @@ class PerceptionPipeline {
 
     // --- 8. depth ---------------------------------------------------------
     DepthMap? depth = _lastDepth;
-    if (config.toggles.depth &&
-        config.cadence.shouldRun(
-          config.cadence.depthEveryNFrames,
+    if (toggles.depth &&
+        cadence.shouldRun(
+          cadence.depthEveryNFrames,
           _frameIndex,
         )) {
       DepthMap fresh = await profiler.measureAsync(
@@ -368,9 +413,9 @@ class PerceptionPipeline {
       frameId: frame.id,
       timestampMicros: frame.timestampMicros,
     );
-    if (config.toggles.roadMarkings) {
-      if (config.cadence.shouldRun(
-        config.cadence.markingsEveryNFrames,
+    if (toggles.roadMarkings) {
+      if (cadence.shouldRun(
+        cadence.markingsEveryNFrames,
         _frameIndex,
       )) {
         markingResult = profiler.measure(
@@ -397,9 +442,9 @@ class PerceptionPipeline {
 
     // --- 10. signs and lights --------------------------------------------
     List<TrafficSign> signs = _lastSigns;
-    if (config.toggles.trafficSigns &&
-        config.cadence.shouldRun(
-          config.cadence.signsEveryNFrames,
+    if (toggles.trafficSigns &&
+        cadence.shouldRun(
+          cadence.signsEveryNFrames,
           _frameIndex,
         )) {
       signs = await profiler.measureAsync(
@@ -413,7 +458,7 @@ class PerceptionPipeline {
     }
 
     List<TrafficLight> lights = _lastLights;
-    if (config.toggles.trafficLights) {
+    if (toggles.trafficLights) {
       lights = await profiler.measureAsync(
         PipelineStageNames.trafficLight,
         () => trafficLightDetector.detectLights(
@@ -428,7 +473,7 @@ class PerceptionPipeline {
     regulatoryTracker.observeLights(lights);
 
     // --- 10b. junction inference -------------------------------------------
-    final IntersectionEstimate? intersection = config.toggles.roadMarkings
+    final IntersectionEstimate? intersection = toggles.roadMarkings
         ? intersectionDetector.detect(
             lanes: lanes,
             drivableArea: drivableArea,
@@ -478,7 +523,7 @@ class PerceptionPipeline {
       timestampMicros: frame.timestampMicros,
       reason: 'planning disabled',
     );
-    if (config.toggles.planning) {
+    if (toggles.planning) {
       path = profiler.measure(
         PipelineStageNames.planning,
         () => planner.plan(world, previous: _lastPath),
@@ -535,7 +580,7 @@ class PerceptionPipeline {
       timestampMicros: frame.timestampMicros,
       frameId: frame.id,
     );
-    if (config.toggles.decision) {
+    if (toggles.decision) {
       decision = profiler.measure(
         PipelineStageNames.decision,
         () => decisionEngine.decide(
@@ -551,7 +596,7 @@ class PerceptionPipeline {
       timestampMicros: frame.timestampMicros,
       frameId: frame.id,
     );
-    if (config.toggles.vehicleSimulation) {
+    if (toggles.vehicleSimulation) {
       profiler.measure(PipelineStageNames.vehicleSim, () {
         command = controller.compute(
           world: world,
@@ -596,6 +641,7 @@ class PerceptionPipeline {
       collisions: collisions,
       totalLatencyMicros: latency,
       stageTimings: timings,
+      performance: plan,
     );
   }
 
@@ -735,6 +781,7 @@ class PerceptionPipeline {
     decisionEngine.reset();
     controller.reset();
     regulatoryTracker.reset();
+    governor.reset();
     roadMarkingTracker.reset();
     roadMarkingDetector.invalidate();
     turnSignalPlanner.reset();

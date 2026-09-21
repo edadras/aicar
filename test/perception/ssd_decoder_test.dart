@@ -217,12 +217,46 @@ void main() {
       expect(d.inputHeight, 320);
     });
 
-    test('is in the catalogue and is the only bundled model', () {
+    test('every bundled model is a detector with a real asset behind it', () {
       final List<ModelDescriptor> bundled = ModelCatalog.all.values
           .where((ModelDescriptor d) => d.isBundledAsset)
           .toList();
-      expect(bundled, hasLength(1));
-      expect(bundled.single.id, ModelCatalog.efficientDetLite0Id);
+      expect(
+        bundled.map((ModelDescriptor d) => d.id),
+        containsAll(<String>[
+          ModelCatalog.efficientDetLite0Id,
+          ModelCatalog.efficientDetLite2Id,
+        ]),
+      );
+      for (final ModelDescriptor d in bundled) {
+        expect(d.assetOrFilePath, startsWith('assets/models/'));
+        expect(d.licence, isNotNull,
+            reason: 'anything shipped in the APK must state its licence');
+        expect(d.sizeBytes, isNotNull);
+      }
+    });
+
+    test('Lite2 is the accuracy option, not the default', () {
+      const ModelDescriptor d = ModelCatalog.efficientDetLite2;
+      expect(d.inputWidth, 448);
+      expect(d.outputFormat, ModelOutputFormat.ssdMobileNet);
+      expect(d.inputFit, InputFit.stretch);
+      expect(d.labels, same(coco90Labels));
+      // Bigger input, so it must not be what a fresh install picks.
+      expect(d.inputWidth,
+          greaterThan(ModelCatalog.efficientDetLite0.inputWidth));
+    });
+
+    test('a downloadable model states its size, licence and checksum', () {
+      for (final ModelDescriptor d in ModelCatalog.all.values) {
+        if (!d.isDownloadable) continue;
+        expect(d.sizeBytes, isNotNull,
+            reason: '${d.id}: the user must be told what it costs');
+        expect(d.licence, isNotNull, reason: d.id);
+        expect(d.downloadSha256, isNotNull,
+            reason: '${d.id}: unverified weights produce confident nonsense');
+        expect(d.downloadUrl, startsWith('https://'), reason: d.id);
+      }
     });
 
     test('YOLO heads still letterbox', () {

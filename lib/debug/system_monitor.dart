@@ -42,12 +42,36 @@ class SystemSample {
     required this.batteryPercent,
     required this.isCharging,
     required this.thermal,
+    this.thermalHeadroom,
   });
 
   final DateTime timestamp;
   final int batteryPercent;
   final bool isCharging;
   final ThermalStatus thermal;
+
+  /// Android's 60-second thermal forecast, normalised so 1.0 is the
+  /// throttling point. Null below API 30 or where the OEM does not implement
+  /// it.
+  ///
+  /// More useful than [thermal] for deciding what to do, because it arrives
+  /// *before* the clocks come down rather than after: at 0.9 there is still
+  /// time to shed a stage and avoid throttling entirely.
+  final double? thermalHeadroom;
+
+  /// True when the forecast says throttling is close even though the current
+  /// status is still clear.
+  bool get isThermallyCommitted =>
+      thermal.isThrottling || (thermalHeadroom ?? 0) >= 0.85;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'ts': timestamp.millisecondsSinceEpoch,
+        'battery': batteryPercent,
+        'charging': isCharging,
+        'thermal': thermal.name,
+        if (thermalHeadroom != null)
+          'headroom': double.parse(thermalHeadroom!.toStringAsFixed(3)),
+      };
 }
 
 /// Watches battery and thermal state during a drive.
@@ -108,12 +132,14 @@ class SystemMonitor {
     try {
       final int level = await _battery.batteryLevel;
       final BatteryState state = await _battery.batteryState;
+      final (ThermalStatus, double?) thermalReading = await _readThermal();
       final SystemSample sample = SystemSample(
         timestamp: DateTime.now(),
         batteryPercent: level,
         isCharging: state == BatteryState.charging ||
             state == BatteryState.full,
-        thermal: await _readThermal(),
+        thermal: thermalReading.$1,
+        thermalHeadroom: thermalReading.$2,
       );
       _latest = sample;
       _history.add(sample);
@@ -128,18 +154,21 @@ class SystemMonitor {
     }
   }
 
-  Future<ThermalStatus> _readThermal() async {
+  Future<(ThermalStatus, double?)> _readThermal() async {
     try {
       final Map<Object?, Object?>? result =
           await _channel.invokeMethod<Map<Object?, Object?>>('thermalStatus');
       if (result == null || result['available'] != true) {
-        return ThermalStatus.unknown;
+        return (ThermalStatus.unknown, null);
       }
-      return ThermalStatus.fromLevel((result['status'] as num?)?.toInt() ?? -1);
+      return (
+        ThermalStatus.fromLevel((result['status'] as num?)?.toInt() ?? -1),
+        (result['headroom'] as num?)?.toDouble(),
+      );
     } on MissingPluginException {
-      return ThermalStatus.unknown;
+      return (ThermalStatus.unknown, null);
     } catch (_) {
-      return ThermalStatus.unknown;
+      return (ThermalStatus.unknown, null);
     }
   }
 
@@ -154,6 +183,9 @@ class SystemMonitor {
           'charging': _latest!.isCharging,
           'thermal': _latest!.thermal.name,
         },
+        if (_latest?.thermalHeadroom != null)
+          'headroom':
+              double.parse(_latest!.thermalHeadroom!.toStringAsFixed(3)),
         'peakThermal': peakThermal.name,
         if (batteryDrainPercentPerHour != null)
           'drainPerHour': double.parse(

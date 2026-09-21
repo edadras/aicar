@@ -21,6 +21,7 @@ import '../pipeline/perception_pipeline.dart';
 import '../pipeline/pipeline_config.dart';
 import '../pipeline/pipeline_factory.dart';
 import '../pipeline/pipeline_result.dart';
+import '../pipeline/thermal_governor.dart';
 import '../recording/recording_schema.dart';
 import '../recording/session_recorder.dart';
 import '../sensors/ego_motion.dart';
@@ -282,7 +283,18 @@ class DrivingSession extends ChangeNotifier {
         frame: frame,
         ego: ego,
         routeProgress: route,
+        systemSample: systemMonitor.latest,
       );
+
+      // The governor's target rate is only real if the scheduler honours it.
+      // Applying it here, rather than making the governor reach into the
+      // scheduler, keeps the governor a pure function of its inputs and
+      // testable without a camera.
+      final PerformancePlan? plan = result.performance;
+      if (plan != null &&
+          (scheduler.targetFps - plan.targetFps).abs() > 0.5) {
+        scheduler.targetFps = plan.targetFps;
+      }
 
       _latest = result;
       _latestFrame = frame;

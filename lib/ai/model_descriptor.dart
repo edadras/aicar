@@ -101,6 +101,9 @@ class ModelDescriptor {
     InputFit? inputFit,
     this.isBundledAsset = false,
     this.sizeBytes,
+    this.downloadUrl,
+    this.downloadSha256,
+    this.licence,
     this.notes,
     this.extra = const <String, dynamic>{},
   }) : _inputFit = inputFit;
@@ -153,6 +156,26 @@ class ModelDescriptor {
 
   final bool isBundledAsset;
   final int? sizeBytes;
+
+  /// Where the weights can be fetched from, for models too large to ship in
+  /// the APK.
+  ///
+  /// A download is always the user's explicit choice: it costs their data,
+  /// their storage and — once running — their battery and their thermal
+  /// budget. Nothing here is fetched in the background.
+  final String? downloadUrl;
+
+  /// Expected SHA-256 of the downloaded file. A model that does not match is
+  /// discarded rather than run: silently running the wrong weights produces
+  /// plausible-looking output, which is the worst possible failure here.
+  final String? downloadSha256;
+
+  /// Licence of the weights, shown before any download starts.
+  final String? licence;
+
+  /// True when this model can be fetched but is not present.
+  bool get isDownloadable => downloadUrl != null;
+
   final String? notes;
 
   /// Format-specific knobs (row anchors, gridding number, depth scale ...).
@@ -197,6 +220,9 @@ class ModelDescriptor {
         inputFit: _inputFit,
         isBundledAsset: isBundledAsset ?? this.isBundledAsset,
         sizeBytes: sizeBytes ?? this.sizeBytes,
+        downloadUrl: downloadUrl,
+        downloadSha256: downloadSha256,
+        licence: licence,
         notes: notes,
         extra: extra,
       );
@@ -224,6 +250,9 @@ class ModelDescriptor {
         'inputFit': inputFit.name,
         'isBundledAsset': isBundledAsset,
         if (sizeBytes != null) 'sizeBytes': sizeBytes,
+        if (downloadUrl != null) 'downloadUrl': downloadUrl,
+        if (downloadSha256 != null) 'downloadSha256': downloadSha256,
+        if (licence != null) 'licence': licence,
         if (notes != null) 'notes': notes,
         if (extra.isNotEmpty) 'extra': extra,
       };
@@ -268,6 +297,9 @@ class ModelDescriptor {
               ),
         isBundledAsset: j['isBundledAsset'] as bool? ?? false,
         sizeBytes: (j['sizeBytes'] as num?)?.toInt(),
+        downloadUrl: j['downloadUrl'] as String?,
+        downloadSha256: j['downloadSha256'] as String?,
+        licence: j['licence'] as String?,
         notes: j['notes'] as String?,
         extra: (j['extra'] as Map<String, dynamic>?) ?? const <String, dynamic>{},
       );

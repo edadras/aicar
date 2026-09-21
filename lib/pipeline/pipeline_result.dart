@@ -4,6 +4,7 @@ import '../planning/planned_path.dart';
 import '../simulation/simulated_control.dart';
 import '../simulation/vehicle_state.dart';
 import '../world_model/world_state.dart';
+import 'thermal_governor.dart';
 
 /// Everything one pipeline cycle produced.
 ///
@@ -20,6 +21,7 @@ class PipelineResult {
     required this.collisions,
     required this.totalLatencyMicros,
     required this.stageTimings,
+    this.performance,
   });
 
   final WorldState world;
@@ -34,6 +36,11 @@ class PipelineResult {
 
   /// Per-stage timings for this cycle, milliseconds.
   final Map<String, double> stageTimings;
+
+  /// What the governor allowed this cycle, and why. Recorded so a session
+  /// that ran slowly can be read back as "it was throttling" rather than
+  /// guessed at.
+  final PerformancePlan? performance;
 
   double get totalLatencyMs => totalLatencyMicros / 1000;
 
@@ -50,6 +57,7 @@ class PipelineResult {
           for (final MapEntry<String, double> e in stageTimings.entries)
             e.key: double.parse(e.value.toStringAsFixed(2)),
         },
+        if (performance != null) 'perf': performance!.toJson(),
       };
 
   @override

@@ -118,17 +118,29 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * Android's thermal headroom, which is the number that actually predicts
-     * a phone on a dashboard throttling mid-drive.
+     * Thermal state, as both a status and a forecast.
+     *
+     * `currentThermalStatus` says what is happening now. `getThermalHeadroom`
+     * (API 30+) predicts where the SoC will be in the requested number of
+     * seconds, normalised so 1.0 is the throttling point — which is the more
+     * useful of the two here, because it lets the governor shed load *before*
+     * the clocks come down rather than after.
      */
     private fun readThermalStatus(): Map<String, Any> {
         return try {
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 val manager = getSystemService(android.os.PowerManager::class.java)
-                mapOf(
+                val out = mutableMapOf<String, Any>(
                     "status" to manager.currentThermalStatus,
                     "available" to true,
                 )
+                if (android.os.Build.VERSION.SDK_INT >= 30) {
+                    // A 60 s forecast: long enough to be actionable, short
+                    // enough that the estimate is still meaningful.
+                    val headroom = manager.getThermalHeadroom(60)
+                    if (!headroom.isNaN()) out["headroom"] = headroom
+                }
+                out
             } else {
                 mapOf("available" to false)
             }
