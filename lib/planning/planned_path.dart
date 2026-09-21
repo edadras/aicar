@@ -211,6 +211,58 @@ class PlannedPath {
         ],
       };
 
+  /// Reconstruct a path from a recording.
+  ///
+  /// The per-point speed profile and clearances are re-derived from the
+  /// stored points rather than recomputed, so a replayed path is exactly the
+  /// path that was drawn at the time.
+  static PlannedPath fromJson(
+    Map<String, dynamic> j, {
+    required int frameId,
+    required int timestampMicros,
+  }) {
+    final Polynomial curve = Polynomial.fromJson(j['curve'] as List<dynamic>);
+    final List<PathPoint> points = <PathPoint>[];
+    double arcLength = 0;
+    Vec2? previous;
+
+    for (final dynamic raw in (j['points'] as List<dynamic>? ?? const <dynamic>[])) {
+      final Map<String, dynamic> pt = raw as Map<String, dynamic>;
+      final Vec2 position = Vec2(
+        (pt['x'] as num).toDouble(),
+        (pt['y'] as num).toDouble(),
+      );
+      if (previous != null) arcLength += position.distanceTo(previous);
+      previous = position;
+      points.add(PathPoint(
+        position: position,
+        distanceAlong: arcLength,
+        headingRadians: math.atan(curve.derivative(position.y)),
+        curvature: (pt['k'] as num?)?.toDouble() ?? 0,
+        targetSpeedMps: (pt['v'] as num?)?.toDouble() ?? 0,
+        lateralClearance: 0,
+      ));
+    }
+
+    return PlannedPath(
+      points: points,
+      curve: curve,
+      source: PathSource.values.firstWhere(
+        (PathSource s) => s.name == j['source'],
+        orElse: () => PathSource.none,
+      ),
+      confidence: (j['conf'] as num?)?.toDouble() ?? 0,
+      lateralOffsetFromReference: (j['offset'] as num?)?.toDouble() ?? 0,
+      maxRangeMeters: (j['maxRange'] as num?)?.toDouble() ?? 0,
+      frameId: frameId,
+      timestampMicros: timestampMicros,
+      isBlocked: j['blocked'] != null,
+      blockedAtMeters: (j['blockedAt'] as num?)?.toDouble(),
+      blockReason: j['blocked'] as String?,
+      corridorHalfWidth: (j['halfWidth'] as num?)?.toDouble() ?? 1.75,
+    );
+  }
+
   @override
   String toString() => 'PlannedPath(${source.label}, '
       '${maxRangeMeters.toStringAsFixed(0)}m, '

@@ -271,6 +271,114 @@ class WorldState {
         if (degradedSubsystems.isNotEmpty) 'degraded': degradedSubsystems,
       };
 
+  /// Reconstruct a world model from a recording, for "recorded results"
+  /// replay.
+  ///
+  /// Only the parts that were serialised come back: the dense depth map and
+  /// segmentation grid are deliberately *not* written to the stream (they
+  /// would dominate its size and are recoverable by re-running the models
+  /// over the recorded frames), so a replayed world has them as null. Every
+  /// number the HUD showed at the time is present.
+  static WorldState fromRecordedJson(
+    Map<String, dynamic> j, {
+    required CameraCalibration calibration,
+  }) {
+    final int frameId = (j['frameId'] as num?)?.toInt() ?? 0;
+    final int ts = (j['ts'] as num?)?.toInt() ?? 0;
+
+    return WorldState(
+      frameId: frameId,
+      timestampMicros: ts,
+      ego: j['ego'] == null
+          ? EgoMotionState.unknown
+          : EgoMotionState.fromJson(j['ego'] as Map<String, dynamic>),
+      calibration: calibration,
+      lanes: j['lanes'] == null
+          ? LaneDetectionResult.empty(frameId: frameId, timestampMicros: ts)
+          : LaneDetectionResult.fromJson(
+              j['lanes'] as Map<String, dynamic>,
+              frameId: frameId,
+              timestampMicros: ts,
+            ),
+      drivableArea: j['drivableArea'] == null
+          ? DrivableArea.empty(frameId: frameId, timestampMicros: ts)
+          : DrivableArea.fromJson(
+              j['drivableArea'] as Map<String, dynamic>,
+              frameId: frameId,
+              timestampMicros: ts,
+            ),
+      roadEdges: <RoadEdge>[
+        for (final dynamic e
+            in (j['roadEdges'] as List<dynamic>? ?? const <dynamic>[]))
+          RoadEdge.fromJson(e as Map<String, dynamic>),
+      ],
+      tracks: <ObjectTrack>[
+        for (final dynamic t
+            in (j['tracks'] as List<dynamic>? ?? const <dynamic>[]))
+          ObjectTrack.fromJson(t as Map<String, dynamic>, frameId: frameId),
+      ],
+      trafficSigns: <TrafficSign>[
+        for (final dynamic s
+            in (j['signs'] as List<dynamic>? ?? const <dynamic>[]))
+          TrafficSign.fromJson(
+            s as Map<String, dynamic>,
+            frameId: frameId,
+            timestampMicros: ts,
+          ),
+      ],
+      trafficLights: <TrafficLight>[
+        for (final dynamic l
+            in (j['lights'] as List<dynamic>? ?? const <dynamic>[]))
+          TrafficLight.fromJson(
+            l as Map<String, dynamic>,
+            frameId: frameId,
+            timestampMicros: ts,
+          ),
+      ],
+      regulatory: _regulatoryFromJson(
+          j['regulatory'] as Map<String, dynamic>?),
+      hazards: <Hazard>[
+        for (final dynamic h
+            in (j['hazards'] as List<dynamic>? ?? const <dynamic>[]))
+          Hazard.fromJson(h as Map<String, dynamic>),
+      ],
+      autonomy: _autonomyFromJson(j['autonomy'] as Map<String, dynamic>?),
+      ambientLuminance:
+          (j['ambientLuminance'] as num?)?.toDouble() ?? 128,
+      degradedSubsystems: <String>[
+        for (final dynamic d
+            in (j['degraded'] as List<dynamic>? ?? const <dynamic>[]))
+          '$d',
+      ],
+    );
+  }
+
+  static RegulatoryContext _regulatoryFromJson(Map<String, dynamic>? j) {
+    if (j == null) return const RegulatoryContext();
+    return RegulatoryContext(
+      speedLimitKph: (j['speedLimit'] as num?)?.toInt(),
+      speedLimitConfidence: (j['speedLimitConf'] as num?)?.toDouble() ?? 0,
+      overtakingProhibited: j['noOvertaking'] as bool? ?? false,
+      inSchoolZone: j['schoolZone'] as bool? ?? false,
+      inRoadWorks: j['roadWorks'] as bool? ?? false,
+      pendingStop: j['pendingStop'] as bool? ?? false,
+      pendingGiveWay: j['pendingGiveWay'] as bool? ?? false,
+    );
+  }
+
+  static AutonomyConfidence _autonomyFromJson(Map<String, dynamic>? j) {
+    if (j == null) return AutonomyConfidence.unknown;
+    return AutonomyConfidence(
+      perception: (j['perception'] as num?)?.toDouble() ?? 0,
+      lanes: (j['lanes'] as num?)?.toDouble() ?? 0,
+      depth: (j['depth'] as num?)?.toDouble() ?? 0,
+      egoMotion: (j['egoMotion'] as num?)?.toDouble() ?? 0,
+      planning: (j['planning'] as num?)?.toDouble() ?? 0,
+      overall: (j['overall'] as num?)?.toDouble() ?? 0,
+      weakestSubsystem: j['weakest'] as String? ?? 'unknown',
+    );
+  }
+
   @override
   String toString() => 'WorldState(#$frameId, ${tracks.length} tracks, '
       '${hazards.length} hazards, ${lanes.mode.badge}, $autonomy)';
