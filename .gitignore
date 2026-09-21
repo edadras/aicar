@@ -43,11 +43,14 @@ app.*.map.json
 *.jks
 *.keystore
 
-# Model weights are large binaries and are installed at runtime,
-# not committed. See docs/MODELS.md.
+# Model weights are large binaries and are installed at runtime, not
+# committed. See docs/MODELS.md. The directories themselves are tracked
+# (.gitkeep + README) because pubspec.yaml declares them as asset
+# directories and a Flutter build errors if a declared directory is missing.
 assets/models/*.tflite
 assets/models/*.onnx
 assets/models/*.bin
+assets/labels/*.txt
 
 # Recorded drive sessions
 /recordings/
