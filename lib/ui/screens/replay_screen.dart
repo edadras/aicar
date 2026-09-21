@@ -1,12 +1,19 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import '../../camera/camera_frame.dart';
+import '../../decision/driving_decision.dart';
 
 import 'package:flutter/material.dart';
 
+import '../../planning/planned_path.dart';
 import '../../recording/session_store.dart';
 import '../../replay/replay_player.dart';
 import '../driving_session.dart';
 import '../hud/hud_panels.dart';
 import '../hud/perception_overlay.dart';
+import '../../world_model/world_state.dart';
 import '../theme.dart';
 
 /// Replays a recorded drive, either as it happened or with the AI re-run.
@@ -117,11 +124,11 @@ class _ReplayScreenState extends State<ReplayScreen> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: <Widget>[
-                          _FrameImage(step: step),
-                          if (_worldFor(step) != null)
+                          _FrameImage(frame: step.frame!),
+                          if (_worldFor(step) case final WorldState world)
                             CustomPaint(
                               painter: PerceptionOverlayPainter(
-                                world: _worldFor(step)!,
+                                world: world,
                                 path: _pathFor(step),
                                 options: const OverlayOptions(),
                               ),
@@ -174,7 +181,8 @@ class _ReplayScreenState extends State<ReplayScreen> {
   }
 
   Widget _decisionCard(ReplayStep step) {
-    final decision = step.rerun?.decision ?? step.recorded.decision;
+    final DrivingDecision? decision =
+        step.rerun?.decision ?? step.recorded.decision;
     if (decision == null) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -324,58 +332,109 @@ class _ReplayScreenState extends State<ReplayScreen> {
     );
   }
 
-  dynamic _worldFor(ReplayStep? step) =>
+  /// Prefer the freshly computed world when re-running, otherwise the one
+  /// that was recorded.
+  WorldState? _worldFor(ReplayStep? step) =>
       step?.rerun?.world ?? step?.recorded.world;
 
-  dynamic _pathFor(ReplayStep? step) =>
+  PlannedPath? _pathFor(ReplayStep? step) =>
       step?.rerun?.path ?? step?.recorded.path;
 }
 
-class _FrameImage extends StatelessWidget {
-  const _FrameImage({required this.step});
+/// Renders a decoded replay frame.
+///
+/// The frame arrives as a raw RGB buffer. Drawing it as one rectangle per
+/// pixel (or even per 2x2 block) costs tens of thousands of draw calls per
+/// frame and makes replay unwatchable, so the buffer is converted once into a
+/// `ui.Image` and blitted. Decoding is asynchronous, so the widget keeps the
+/// previous image on screen while the next one is prepared rather than
+/// flickering to black.
+class _FrameImage extends StatefulWidget {
+  const _FrameImage({required this.frame});
 
-  final ReplayStep? step;
+  final CameraFrame frame;
 
   @override
-  Widget build(BuildContext context) {
-    // The decoded frame is raw RGB; rendering it through a RawImage would
-    // need a ui.Image, so the simplest correct thing is a painter.
-    return CustomPaint(painter: _RgbPainter(step: step));
-  }
+  State<_FrameImage> createState() => _FrameImageState();
 }
 
-class _RgbPainter extends CustomPainter {
-  const _RgbPainter({required this.step});
-
-  final ReplayStep? step;
+class _FrameImageState extends State<_FrameImage> {
+  ui.Image? _image;
+  int? _decodedFrameId;
+  bool _decoding = false;
 
   @override
-  void paint(Canvas canvas, Size size) {
-    // Frames are drawn by the platform image widget in the live HUD; during
-    // replay the raw buffer is shown as a simple luminance rendering, which
-    // is enough to judge the overlays against and avoids a per-frame texture
-    // upload.
-    final frame = step?.frame;
-    if (frame == null) return;
+  void initState() {
+    super.initState();
+    unawaited(_decode());
+  }
 
-    const int step_ = 2;
-    final Paint paint = Paint();
-    final double sx = size.width / frame.width;
-    final double sy = size.height / frame.height;
+  @override
+  void didUpdateWidget(_FrameImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.frame.id != oldWidget.frame.id) unawaited(_decode());
+  }
 
-    for (int y = 0; y < frame.height; y += step_) {
-      for (int x = 0; x < frame.width; x += step_) {
-        final (int r, int g, int b) = frame.pixelAt(x, y);
-        paint.color = Color.fromARGB(255, r, g, b);
-        canvas.drawRect(
-          Rect.fromLTWH(x * sx, y * sy, sx * step_ + 1, sy * step_ + 1),
-          paint,
-        );
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _decode() async {
+    if (_decoding || _decodedFrameId == widget.frame.id) return;
+    _decoding = true;
+    final CameraFrame frame = widget.frame;
+
+    try {
+      // decodeImageFromPixels wants RGBA; the pipeline's frames are RGB.
+      final Uint8List rgba = Uint8List(frame.width * frame.height * 4);
+      final Uint8List source = frame.bytes;
+      if (frame.format == PixelFormat.rgb888) {
+        for (int p = 0, q = 0; q < rgba.length; p += 3, q += 4) {
+          rgba[q] = source[p];
+          rgba[q + 1] = source[p + 1];
+          rgba[q + 2] = source[p + 2];
+          rgba[q + 3] = 255;
+        }
+      } else {
+        for (int p = 0, q = 0; q < rgba.length; p++, q += 4) {
+          final int l = source[p];
+          rgba[q] = l;
+          rgba[q + 1] = l;
+          rgba[q + 2] = l;
+          rgba[q + 3] = 255;
+        }
       }
+
+      final Completer<ui.Image> completer = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        rgba,
+        frame.width,
+        frame.height,
+        ui.PixelFormat.rgba8888,
+        completer.complete,
+      );
+      final ui.Image image = await completer.future;
+
+      if (!mounted) {
+        image.dispose();
+        return;
+      }
+      setState(() {
+        _image?.dispose();
+        _image = image;
+        _decodedFrameId = frame.id;
+      });
+    } finally {
+      _decoding = false;
     }
   }
 
   @override
-  bool shouldRepaint(_RgbPainter old) =>
-      old.step?.recorded.frameId != step?.recorded.frameId;
+  Widget build(BuildContext context) {
+    final ui.Image? image = _image;
+    if (image == null) return const ColoredBox(color: Colors.black);
+    return RawImage(image: image, fit: BoxFit.fill);
+  }
 }

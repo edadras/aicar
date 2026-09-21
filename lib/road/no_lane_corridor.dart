@@ -371,7 +371,7 @@ class NoLaneCorridorEstimator {
     final double diversityScore =
         clampDouble((evidence.length - 1) / 2.0, 0, 1);
 
-    double c = 0.30 * residualScore +
+    final double c = 0.30 * residualScore +
         0.22 * rangeScore +
         0.18 * densityScore +
         0.30 * diversityScore;

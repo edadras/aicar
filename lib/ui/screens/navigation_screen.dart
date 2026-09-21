@@ -3,9 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
-import '../../navigation/maneuver.dart';
 import '../../navigation/route.dart';
-import '../../navigation/route_provider.dart';
 import '../../sensors/ego_motion.dart';
 import '../driving_session.dart';
 import '../theme.dart';
@@ -251,9 +249,3 @@ class _NavigationScreenState extends State<NavigationScreen> {
     });
   }
 }
-
-/// Exposed so Settings can force the offline provider.
-RouteProvider offlineOnlyProvider() => const DirectLineRouteProvider();
-
-/// Intent labels, for documentation and the settings screen.
-const List<ManeuverIntent> supportedIntents = ManeuverIntent.values;

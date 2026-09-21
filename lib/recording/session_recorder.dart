@@ -73,6 +73,10 @@ class SessionRecorder {
   final Directory? _explicitRoot;
 
   Directory? _sessionDirectory;
+
+  // Closed in stop(), after the buffer is drained. The analyzer cannot follow
+  // the ownership across the async drain, hence the ignore.
+  // ignore: close_sinks
   IOSink? _sink;
   String? _sessionId;
   DateTime? _startedAt;

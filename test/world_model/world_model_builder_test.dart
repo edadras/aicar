@@ -1,4 +1,3 @@
-import 'package:aicar/core/confidence.dart';
 import 'package:aicar/core/geometry.dart';
 import 'package:aicar/perception/detection.dart';
 import 'package:aicar/perception/object_class.dart';

@@ -13,7 +13,6 @@ import 'package:aicar/planning/local_path_planner.dart';
 import 'package:aicar/planning/planned_path.dart';
 import 'package:aicar/road/classical_lane_detector.dart';
 import 'package:aicar/road/heuristic_road_segmenter.dart';
-import 'package:aicar/sensors/ego_motion.dart';
 import 'package:aicar/tracking/multi_object_tracker.dart';
 import 'package:flutter_test/flutter_test.dart';
 
