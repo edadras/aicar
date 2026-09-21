@@ -51,3 +51,6 @@ assets/models/*.bin
 
 # Recorded drive sessions
 /recordings/
+
+# Android SDK locations vary per machine
+/android/local.properties
