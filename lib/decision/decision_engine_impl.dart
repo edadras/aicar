@@ -356,11 +356,19 @@ class RuleBasedDecisionEngine implements DecisionEngine {
   List<_Candidate> _pathCandidates(WorldState world, PlannedPath path) {
     final List<_Candidate> out = <_Candidate>[];
 
-    // `PathSource.none` means there was nothing to plan *from*, which is a
-    // statement about perception, not about an obstruction. The uncertainty
-    // candidates cover it, and reporting "path blocked" here would give the
-    // driver a confidently wrong explanation.
-    if (path.isBlocked && path.source != PathSource.none) {
+    // Two cases where a blocked path must not produce a specific action:
+    //
+    //  * `PathSource.none` means there was nothing to plan *from*, which is a
+    //    statement about perception, not about an obstruction. Reporting
+    //    "path blocked" would give the driver a confidently wrong reason.
+    //  * Low autonomy confidence means this inference rests on perception we
+    //    have already decided not to trust. Acting decisively on an untrusted
+    //    inference is worse than admitting uncertainty, so the UNCERTAIN
+    //    candidate is allowed to win instead. Directly observed hazards
+    //    (emergency braking, yielding) still outrank it on priority.
+    if (path.isBlocked &&
+        path.source != PathSource.none &&
+        !world.autonomy.isLow) {
       final double blockedAt = path.blockedAtMeters ?? 0;
       if (blockedAt < config.stopDistanceMeters) {
         out.add(_Candidate(

@@ -116,14 +116,25 @@ class WorldModelBuilder {
     required double ambientLuminance,
     required CameraCalibration calibration,
   }) {
-    // Perception: how much we trust what we can see. A missing detector is
-    // zero, not "no objects".
-    double perception = detections?.frameConfidence ?? 0;
-    if (segmentation != null && segmentation.isUsable) {
-      perception = math.max(
-        perception,
-        (perception + segmentation.overallConfidence) / 2,
-      );
+    // Perception: how much we trust what we can see.
+    //
+    // Object detection and surface segmentation are different capabilities
+    // and are not interchangeable. Knowing where the road is does not
+    // compensate for not knowing what is on it — the dangerous unknowns are
+    // the objects. So a degraded detector pins perception at zero rather
+    // than being averaged upwards by a healthy segmenter, and otherwise the
+    // detector dominates the blend.
+    final bool detectorDegraded = detections == null || detections.isDegraded;
+    double perception;
+    if (detectorDegraded) {
+      perception = 0;
+    } else {
+      final double detectionScore = detections.frameConfidence;
+      final double segmentationScore =
+          segmentation != null && segmentation.isUsable
+              ? segmentation.overallConfidence
+              : detectionScore;
+      perception = 0.75 * detectionScore + 0.25 * segmentationScore;
     }
 
     // Road model: lanes if usable, otherwise the corridor, which is inherently

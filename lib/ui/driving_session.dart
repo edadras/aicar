@@ -13,6 +13,7 @@ import '../camera/camera_service.dart';
 import '../camera/frame_scheduler.dart';
 import '../camera/image_preprocessing.dart';
 import '../core/logging.dart';
+import '../debug/system_monitor.dart';
 import '../core/profiling.dart';
 import '../navigation/navigation_service.dart';
 import '../navigation/route.dart';
@@ -60,6 +61,7 @@ class DrivingSession extends ChangeNotifier {
   final NavigationService navigation;
 
   final SensorHub sensors = SensorHub();
+  final SystemMonitor systemMonitor = SystemMonitor();
   late final CameraService camera = CameraService(clock: sensors.clock);
   final FrameScheduler scheduler = FrameScheduler();
 
@@ -180,6 +182,7 @@ class DrivingSession extends ChangeNotifier {
       _gpsSub = sensors.gpsFixes.listen(_onGpsFix);
       _imuSub = sensors.rawImuSamples.listen(_onImuSample);
 
+      systemMonitor.start();
       await camera.startStream();
       _setState(DrivingSessionState.running);
       Log.info(_tag, 'drive started');
@@ -198,6 +201,7 @@ class DrivingSession extends ChangeNotifier {
     _gpsSub = null;
     _imuSub = null;
 
+    systemMonitor.stop();
     await camera.stopStream();
     await sensors.stop();
     if (isRecording) await stopRecording();

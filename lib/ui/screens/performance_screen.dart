@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../camera/camera_service.dart';
 import '../../core/profiling.dart';
+import '../../debug/system_monitor.dart';
 import '../driving_session.dart';
 import '../theme.dart';
 
@@ -73,6 +74,79 @@ class PerformanceScreen extends StatelessWidget {
                         value: '${profiler?.droppedFrames ?? 0}',
                       ),
                     ],
+                  ),
+                ),
+              ),
+
+              const SectionHeader(
+                'Device',
+                subtitle: 'On a dashboard in sunlight, heat is usually the '
+                    'real limit',
+              ),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Builder(
+                    builder: (BuildContext context) {
+                      final SystemSample? sample =
+                          session.systemMonitor.latest;
+                      if (sample == null) {
+                        return const Text(
+                          'Start a drive to sample battery and thermal '
+                          'state.',
+                          style: HudTheme.caption,
+                        );
+                      }
+                      final double? drain =
+                          session.systemMonitor.batteryDrainPercentPerHour;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceAround,
+                            children: <Widget>[
+                              HudReadout(
+                                label: 'Battery',
+                                value: '${sample.batteryPercent}',
+                                unit: '%',
+                                valueColor: sample.batteryPercent < 20
+                                    ? HudTheme.critical
+                                    : HudTheme.textPrimary,
+                              ),
+                              HudReadout(
+                                label: 'Drain',
+                                value: drain == null
+                                    ? '—'
+                                    : drain.toStringAsFixed(0),
+                                unit: '%/h',
+                              ),
+                              HudReadout(
+                                label: 'Thermal',
+                                value: sample.thermal.label,
+                                valueColor: sample.thermal.isThrottling
+                                    ? HudTheme.warning
+                                    : HudTheme.accent,
+                              ),
+                            ],
+                          ),
+                          if (sample.thermal.isThrottling) ...<Widget>[
+                            const SizedBox(height: 10),
+                            const Text(
+                              'The SoC is being clocked down. A falling frame '
+                              'rate right now is thermal, not a change in the '
+                              'code — lower the inference resolution or the '
+                              'target FPS to recover.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: HudTheme.warning,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),

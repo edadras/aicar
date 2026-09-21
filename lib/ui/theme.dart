@@ -205,16 +205,30 @@ class HudReadout extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Flexible(
-                child: Text(
+              // Only flex when the caller gave a width. A readout placed
+              // directly in an unbounded Row (which is how the hazard banner
+              // and the performance screen use it) would otherwise ask a
+              // Flexible child to fill infinite space and fail layout.
+              if (width != null)
+                Flexible(
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: (large ? HudTheme.hudValueLarge : HudTheme.hudValue)
+                        .copyWith(color: valueColor ?? HudTheme.textPrimary),
+                  ),
+                )
+              else
+                Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: (large ? HudTheme.hudValueLarge : HudTheme.hudValue)
                       .copyWith(color: valueColor ?? HudTheme.textPrimary),
                 ),
-              ),
               if (unit != null) ...<Widget>[
                 const SizedBox(width: 3),
                 Text(
