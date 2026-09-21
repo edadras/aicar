@@ -14,10 +14,11 @@ import '../theme.dart';
 
 /// Install, select and inspect the AI models.
 ///
-/// No weights ship with the app: they are large, separately licensed and
-/// upgradable on their own schedule. This screen is what makes that a
-/// workable arrangement rather than an obstacle — it says exactly what is
-/// missing, what each role does without it, and where to put the file.
+/// One detector ships inside the app so perception works on first launch.
+/// Everything else is installed at runtime: model files are large, separately
+/// licensed and upgradable on their own schedule. This screen is what makes
+/// that a workable arrangement rather than an obstacle — it says exactly what
+/// is missing, what each role does without it, and where to put the file.
 class AiModelsScreen extends StatefulWidget {
   const AiModelsScreen({super.key});
 
@@ -149,7 +150,10 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
                     'press refresh. A file whose name matches one in the '
                     'catalogue is configured automatically; anything else '
                     'needs a JSON sidecar of the same name describing its '
-                    'input size, normalisation and output layout.',
+                    'input size, normalisation and output layout.\n\n'
+                    'A model you install replaces the bundled one with the '
+                    'same id. Bundled models cannot be deleted — select a '
+                    'different one for the role instead.',
                     style: HudTheme.caption,
                   ),
                   const SizedBox(height: 10),
@@ -208,8 +212,9 @@ class _AiModelsScreenState extends State<AiModelsScreen> {
                   ),
                   title: Text(d.name, style: HudTheme.body),
                   subtitle: Text(
-                    '${d.role.label} · expects '
-                    '${d.assetOrFilePath.split('/').last}'
+                    '${d.role.label} · '
+                    '${d.isBundledAsset ? 'ships with the app' : 'expects '
+                        '${d.assetOrFilePath.split('/').last}'}'
                     '${d.notes == null ? '' : '\n${d.notes}'}',
                     style: HudTheme.caption,
                   ),
@@ -241,7 +246,8 @@ class _RoleCard extends StatelessWidget {
         ModelRole.objectDetection =>
           'Nothing. Vehicles, pedestrians and obstacles are NOT detected, '
               'and the stack reports degraded confidence rather than an '
-              'empty road.',
+              'empty road. The app ships with a detector, so this only '
+              'happens if you turn it off.',
         ModelRole.depthEstimation =>
           'Distances still work, from ground-plane geometry, class size '
               'priors and motion parallax — with lower confidence.',
@@ -318,7 +324,8 @@ class _RoleCard extends StatelessWidget {
                             '${m.sizeLabel} · '
                             '${m.descriptor.inputWidth}x'
                             '${m.descriptor.inputHeight} · '
-                            '${m.descriptor.delegate.name.toUpperCase()}',
+                            '${m.descriptor.delegate.name.toUpperCase()}'
+                            '${m.isBundled ? ' · bundled' : ''}',
                             style: HudTheme.caption,
                           ),
                         ),

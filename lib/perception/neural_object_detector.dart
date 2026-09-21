@@ -95,20 +95,49 @@ class NeuralObjectDetector extends ObjectDetector {
     }
 
     try {
-      final LetterboxResult lb = ImagePreprocessing.letterbox(
-        frame.bytes,
-        frame.width,
-        frame.height,
-        _descriptor.inputWidth,
-        channels: frame.bytesPerPixel,
+      // Fit the frame to the input tensor the way this head was trained,
+      // and keep the transform so the boxes can be mapped back exactly.
+      LetterboxResult? lb;
+      final Uint8List input;
+      if (_descriptor.inputFit == InputFit.letterbox) {
+        lb = ImagePreprocessing.letterbox(
+          frame.bytes,
+          frame.width,
+          frame.height,
+          _descriptor.inputWidth,
+          channels: frame.bytesPerPixel,
+        );
+        input = lb.bytes;
+      } else {
+        input = ImagePreprocessing.resize(
+          frame.bytes,
+          frame.width,
+          frame.height,
+          _descriptor.inputWidth,
+          _descriptor.inputHeight,
+          channels: frame.bytesPerPixel,
+        );
+      }
+
+      // The camera can hand us a grayscale frame; the input tensor's channel
+      // count is fixed. Reconcile them here, where the mismatch is still
+      // visible — the native runtime would just copy a short buffer into a
+      // long tensor and leave the tail holding the previous frame.
+      final Uint8List fitted = ImagePreprocessing.toChannels(
+        input,
+        frame.bytesPerPixel,
+        _descriptor.inputChannels,
       );
 
       final InferenceOutput out;
       if (_descriptor.quantized) {
-        out = await _backend.runQuantized(handle, lb.bytes);
+        // A quantised input tensor takes the raw bytes: the interpreter's own
+        // scale and zero point turn them back into the range the network was
+        // trained on, so normalising here would apply it twice.
+        out = await _backend.runQuantized(handle, fitted);
       } else {
         _inputBuffer = ImagePreprocessing.toFloatTensor(
-          lb.bytes,
+          fitted,
           _descriptor.inputWidth,
           _descriptor.inputHeight,
           channels: _descriptor.inputChannels,
@@ -143,6 +172,7 @@ class NeuralObjectDetector extends ObjectDetector {
         timestampMicros: frame.timestampMicros,
         inferenceMicros: out.inferenceMicros,
         modelName: _descriptor.id,
+        isSaturated: _isSaturated(out),
       );
     } catch (e, st) {
       // A failed inference must degrade the frame, never kill the pipeline.
@@ -157,11 +187,12 @@ class NeuralObjectDetector extends ObjectDetector {
 
   List<Detection> _decode(
     InferenceOutput out,
-    LetterboxResult lb,
+    LetterboxResult? lb,
     CameraFrame frame,
   ) {
     switch (_descriptor.outputFormat) {
       case ModelOutputFormat.yoloV8:
+        if (lb == null) return const <Detection>[];
         return YoloDecoder.toDetections(
           raw: YoloDecoder.decodeV8(
             output: out.tensor(0),
@@ -179,6 +210,7 @@ class NeuralObjectDetector extends ObjectDetector {
         );
 
       case ModelOutputFormat.yoloV5:
+        if (lb == null) return const <Detection>[];
         return YoloDecoder.toDetections(
           raw: YoloDecoder.decodeV5(
             output: out.tensor(0),
@@ -207,6 +239,9 @@ class NeuralObjectDetector extends ObjectDetector {
           scoreThreshold: _descriptor.scoreThreshold,
           frameId: frame.id,
           timestampMicros: frame.timestampMicros,
+          letterbox: lb,
+          originalWidth: frame.width,
+          originalHeight: frame.height,
         );
 
       default:
@@ -214,6 +249,20 @@ class NeuralObjectDetector extends ObjectDetector {
             'output format ${_descriptor.outputFormat.name} is not a detector head');
         return const <Detection>[];
     }
+  }
+
+  /// Whether this frame exhausted the model's output capacity.
+  ///
+  /// Only fixed-slot heads can run out: a YOLO grid emits a box for every
+  /// anchor, so its output is always as complete as the network is.
+  bool _isSaturated(InferenceOutput out) {
+    if (_descriptor.outputFormat != ModelOutputFormat.ssdMobileNet) return false;
+    if (out.outputCount < 4) return false;
+    return YoloDecoder.isSsdSaturated(
+      scores: out.tensor(2),
+      count: out.tensor(3).isEmpty ? 0 : out.tensor(3)[0].round(),
+      scoreThreshold: _descriptor.scoreThreshold,
+    );
   }
 
   @override

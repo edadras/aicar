@@ -207,6 +207,8 @@ class _ReadinessCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool detectorMissing =
         missingRoles.contains(ModelRole.objectDetection);
+    final String? detectorName =
+        session.registry.selectedFor(ModelRole.objectDetection)?.name;
 
     return Card(
       child: Padding(
@@ -222,15 +224,15 @@ class _ReadinessCard extends StatelessWidget {
             _ReadinessRow(
               ok: true,
               title: 'Lanes, drivable area, distance, planning',
-              detail: 'Classical algorithms work with no models installed',
+              detail: 'Classical algorithms — no extra model files needed',
             ),
             _ReadinessRow(
               ok: !detectorMissing,
               title: 'Object detection',
               detail: detectorMissing
-                  ? 'No model installed — vehicles, pedestrians and '
+                  ? 'No detector selected — vehicles, pedestrians and '
                       'obstacles will NOT be detected'
-                  : 'Neural detector installed',
+                  : detectorName ?? 'Neural detector installed',
               severe: detectorMissing,
             ),
             _ReadinessRow(

@@ -17,6 +17,34 @@ const List<String> cocoLabels = <String>[
   'hair drier', 'toothbrush',
 ];
 
+/// The COCO **90-class** label map, as the TensorFlow Object Detection API
+/// exports it.
+///
+/// Distinct from [cocoLabels] and not interchangeable with it: this map keeps
+/// the gaps in the original COCO category ids as `???` placeholders, so a
+/// class index from an SSD or EfficientDet head lands on the right name.
+/// Indexing an 80-entry list with a 90-map index silently mislabels
+/// everything after the first gap — a motorcycle becomes an airplane.
+///
+/// The `???` entries have no mapping in [ObjectClassMapping], so detections
+/// on them are dropped rather than becoming `unknown` obstacles.
+const List<String> coco90Labels = <String>[
+  'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
+  'truck', 'boat', 'traffic light', 'fire hydrant', '???', 'stop sign',
+  'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+  'elephant', 'bear', 'zebra', 'giraffe', '???', 'backpack', 'umbrella',
+  '???', '???', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
+  'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
+  'skateboard', 'surfboard', 'tennis racket', 'bottle', '???',
+  'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+  'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut',
+  'cake', 'chair', 'couch', 'potted plant', 'bed', '???', 'dining table',
+  '???', '???', 'toilet', '???', 'tv', 'laptop', 'mouse', 'remote',
+  'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+  'refrigerator', '???', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+  'hair drier', 'toothbrush',
+];
+
 /// Surface classes for a Cityscapes-style segmenter, reduced to the ten this
 /// project cares about. Index order matches `docs/MODELS.md`.
 const List<String> drivingSurfaceLabels = <String>[
@@ -43,12 +71,13 @@ const List<String> trafficSignLabels = <String>[
 
 /// Models this build knows how to drive.
 ///
-/// The app ships **no weights**: model files are large, licence-encumbered and
-/// upgradable independently of the app, so they are installed at runtime into
-/// the app's model directory (see `docs/MODELS.md`). The catalog is what makes
-/// that possible without the user writing a descriptor by hand — it records
-/// the input size, normalisation, output layout and label set each known
-/// architecture needs.
+/// One detector ships inside the APK ([efficientDetLite0]) so perception works
+/// on first launch. Everything else is installed at runtime into the app's
+/// model directory (see `docs/MODELS.md`): model files are large,
+/// licence-encumbered and upgradable independently of the app. The catalog is
+/// what makes that possible without the user writing a descriptor by hand — it
+/// records the input size, normalisation, output layout and label set each
+/// known architecture needs.
 class ModelCatalog {
   const ModelCatalog._();
 
@@ -56,6 +85,7 @@ class ModelCatalog {
   static const String yolov8sId = 'yolov8s-640-fp16';
   static const String yolo11nId = 'yolo11n-640-fp16';
   static const String ssdMobileNetId = 'ssd-mobilenet-v2-int8';
+  static const String efficientDetLite0Id = 'efficientdet-lite0-320-int8';
   static const String midasSmallId = 'midas-v2-small-256';
   static const String depthAnythingId = 'depth-anything-v2-small-518';
   static const String ufldId = 'ufld-v2-culane-800';
@@ -68,6 +98,7 @@ class ModelCatalog {
           yolov8n,
           yolov8s,
           yolo11n,
+          efficientDetLite0,
           ssdMobileNet,
           midasSmall,
           depthAnythingSmall,
@@ -137,6 +168,46 @@ class ModelCatalog {
     labelVocabulary: 'coco',
   );
 
+  /// The detector **shipped inside the APK**, so the stack has real object
+  /// detection on first launch with nothing to download.
+  ///
+  /// EfficientDet-Lite0 is Apache-2.0 (Google / TensorFlow Hub), which is why
+  /// it is the one bundled: YOLOv8 and YOLO11 are excellent but AGPL-3.0, and
+  /// redistributing their weights inside the APK would put the whole app
+  /// under the AGPL. Those stay installable at runtime, as the user's choice
+  /// about their own licensing.
+  ///
+  /// Its exported graph emits at most 25 boxes per frame. That is a property
+  /// of the export, not a threshold that can be raised: a dense intersection
+  /// can genuinely fill every slot, and when it does the detector marks the
+  /// frame saturated rather than letting the stack believe the rest of the
+  /// scene is empty.
+  static const ModelDescriptor efficientDetLite0 = ModelDescriptor(
+    id: efficientDetLite0Id,
+    name: 'EfficientDet-Lite0 (COCO, 320, int8) — bundled',
+    role: ModelRole.objectDetection,
+    assetOrFilePath: bundledDetectorAsset,
+    inputWidth: 320,
+    inputHeight: 320,
+    outputFormat: ModelOutputFormat.ssdMobileNet,
+    labels: coco90Labels,
+    quantized: true,
+    scoreThreshold: 0.40,
+    delegate: InferenceDelegate.nnapi,
+    labelVocabulary: 'coco',
+    isBundledAsset: true,
+    sizeBytes: 4563519,
+    notes: 'Ships with the app (Apache-2.0). ~20 ms per frame on a Galaxy '
+        'S23 via NNAPI. Caps at 25 detections per frame and, at 320x320, '
+        'loses small objects beyond roughly 60 m — install a larger detector '
+        'for longer range.',
+  );
+
+  /// Flutter asset key of the bundled detector. Passed straight to the native
+  /// runtime, which turns it into an APK lookup key.
+  static const String bundledDetectorAsset =
+      'assets/models/efficientdet_lite0.tflite';
+
   /// Int8 and NNAPI-friendly: the coolest-running option for long drives,
   /// at a real cost in small-object recall.
   static const ModelDescriptor ssdMobileNet = ModelDescriptor(
@@ -147,7 +218,7 @@ class ModelCatalog {
     inputWidth: 300,
     inputHeight: 300,
     outputFormat: ModelOutputFormat.ssdMobileNet,
-    labels: cocoLabels,
+    labels: coco90Labels,
     quantized: true,
     scoreThreshold: 0.45,
     delegate: InferenceDelegate.nnapi,

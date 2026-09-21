@@ -69,8 +69,9 @@ wheel that turns with the simulated command.
 | Free space | ~120 MB for the app, plus ~2 GB per hour if you record drives with frames |
 
 Nothing else needs installing on the phone. No root, no Termux, no separate
-runtime, no companion app. TensorFlow Lite and its GPU/NNAPI delegates are
-linked into the APK.
+runtime, no companion app, and no model download. TensorFlow Lite with its
+GPU/NNAPI delegates, and the EfficientDet-Lite0 detector, are both inside the
+APK.
 
 ### Build and install
 
@@ -80,8 +81,8 @@ flutter pub get
 # One APK for your own phone, straight over USB:
 flutter run --release            # debug builds are several times slower
 
-# Or produce an installable APK. --split-per-abi gives a 25 MB arm64 APK
-# instead of a 70 MB fat one, because the TensorFlow Lite AAR ships native
+# Or produce an installable APK. --split-per-abi gives a 30 MB arm64 APK
+# instead of a 74 MB fat one, because the TensorFlow Lite AAR ships native
 # libraries for three architectures.
 flutter build apk --release --split-per-abi
 adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
@@ -100,9 +101,10 @@ enabled for that file manager. Replace `signingConfig` in
    and navigation, and nothing else.
 2. **Run the Calibration wizard.** Two minutes, once per mounting position.
    Every distance depends on it.
-3. **Optionally install a detector.** The app runs without one, but nothing
-   will be detected until you do — see the table below and
-   [docs/MODELS.md](docs/MODELS.md).
+3. **Drive.** Object detection works out of the box: EfficientDet-Lite0 ships
+   inside the APK and is selected automatically. Installing a stronger
+   detector, or a depth/lane/segmentation model, is optional — see the table
+   below and [docs/MODELS.md](docs/MODELS.md).
 
 ### Permissions the app requests
 
@@ -113,11 +115,24 @@ the merged manifest: this app never records audio and never writes outside
 its own private directory, so the list a user sees at install matches what the
 app can actually do.
 
-### Installing AI models
+### AI models
 
-No neural weights ship with the app: they are large, separately licensed, and
-upgradable on their own schedule. Push `.tflite` files into the app's model
-directory and press refresh on the **AI models** screen. See
+One detector ships in the APK: **EfficientDet-Lite0** (COCO, 320x320, int8,
+4.6 MB, Apache-2.0). It is selected automatically on first launch, so the app
+detects vehicles, pedestrians, cyclists, motorcycles and traffic lights with
+nothing to download.
+
+It is deliberately the *bundleable* detector rather than the best one.
+YOLOv8 and YOLO11 are stronger and the app knows how to run them, but they
+are AGPL-3.0 and shipping their weights inside the APK would relicense this
+whole application. Installing one at runtime is your own copy and your own
+licensing decision; provenance for what is bundled is in
+[assets/models/NOTICE.md](assets/models/NOTICE.md).
+
+Every other role runs a classical fallback until you install a model. Push
+`.tflite` files into the app's model directory and press refresh on the **AI
+models** screen; a file whose name matches a catalogue entry — including
+`efficientdet_lite0.tflite` itself — replaces the bundled one. See
 [docs/MODELS.md](docs/MODELS.md) for the supported architectures, the export
 commands, and the JSON sidecar format for models the catalogue does not know.
 
@@ -131,26 +146,30 @@ same estimate is good to about a metre.
 
 ---
 
-## What works without models
+## What runs with nothing installed
 
-The stack degrades in a specific, stated way rather than failing or — much
-worse — quietly pretending.
+Out of the box — the bundled detector plus the classical stack — every stage
+is functional. The table says what each one does before you install anything
+more, so the limits are stated rather than discovered on the road.
 
-| Capability | With no models installed |
-|---|---|
-| Lane detection | Classical IPM + matched filter. Good on clear markings, weaker at night and on worn paint. |
-| Drivable area | Heuristic seeded region growing. Cannot distinguish asphalt from similarly-coloured pavement. |
-| Distance | Ground-plane geometry, class size priors and motion parallax. Lower confidence, still metric. |
-| Traffic lights | Hue + aspect position. This is the intended implementation, not a fallback. |
-| Traffic signs | Shape and colour give coarse categories; speed-limit digits by template matching. |
-| Planning, decisions, vehicle simulation | Fully functional. |
-| **Object detection** | **Nothing.** Vehicles, pedestrians and obstacles are **not** detected. |
+| Capability | Out of the box | With a model installed |
+|---|---|---|
+| Object detection | EfficientDet-Lite0 at 320x320. Solid on nearby traffic and pedestrians; loses small objects past roughly 60 m, and caps at 25 boxes per frame. | YOLOv8s roughly doubles useful range and removes the box cap. |
+| Lane detection | Classical IPM + matched filter. Good on clear markings, weaker at night and on worn paint. | UFLD v2 is far better at night. |
+| Drivable area | Heuristic seeded region growing. Cannot distinguish asphalt from similarly-coloured pavement. | A semantic segmenter does. |
+| Distance | Ground-plane geometry, class size priors and motion parallax. Lower confidence, still metric. | A depth network adds a fifth cue and sharpens occluded objects. |
+| Traffic lights | Hue + aspect position. This is the intended implementation, not a fallback. | — |
+| Traffic signs | Shape and colour give coarse categories; speed-limit digits by template matching. | A GTSRB classifier on detector crops. |
+| Planning, decisions, vehicle simulation | Fully functional. | — |
 
-That last row is why the stack reports an explicitly *degraded* result rather
-than an empty scene when no detector is installed: reporting "the road is
-clear" because you cannot see is the most dangerous thing a perception system
-can do. Autonomy confidence collapses and the decision engine goes to
-`UNCERTAIN`.
+Two honesty rules hold throughout. If you turn the detector off, or it fails
+to load, the stack reports an explicitly *degraded* result rather than an
+empty scene — reporting "the road is clear" because you cannot see is the most
+dangerous thing a perception system can do, so autonomy confidence collapses
+and the decision engine goes to `UNCERTAIN`. And if a frame fills every one of
+the detector's 25 output slots with a confident box, the frame is marked
+**saturated**: the boxes are real, but they are provably not all of them, and
+confidence drops accordingly.
 
 ---
 

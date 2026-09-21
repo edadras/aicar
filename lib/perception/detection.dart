@@ -90,6 +90,7 @@ class DetectionResult {
     required this.modelName,
     this.isDegraded = false,
     this.degradedReason,
+    this.isSaturated = false,
   });
 
   /// The honest empty result used when no detector model is installed. It is
@@ -120,6 +121,16 @@ class DetectionResult {
   final bool isDegraded;
   final String? degradedReason;
 
+  /// True when the detector's output tensor ran out of slots: every box it
+  /// could emit came back, and every one of them was confident.
+  ///
+  /// This is not the same as [isDegraded]. The boxes we got are real and
+  /// usable; what we have lost is the guarantee that they are *all* of them.
+  /// A crowded intersection can genuinely exceed a mobile detector's export
+  /// cap, and silently truncating the scene there is exactly the situation in
+  /// which the truncated objects matter most.
+  final bool isSaturated;
+
   bool get isEmpty => detections.isEmpty;
   int get count => detections.length;
 
@@ -135,7 +146,10 @@ class DetectionResult {
     for (final Detection d in detections) {
       sum += d.score;
     }
-    return clampDouble(sum / detections.length, 0, 1);
+    final double mean = clampDouble(sum / detections.length, 0, 1);
+    // A saturated frame is not blind, but it is provably incomplete, so it
+    // must not score like a clean observation of the whole scene.
+    return isSaturated ? mean * 0.6 : mean;
   }
 
   List<Detection> ofClass(ObjectClass c) =>
@@ -144,5 +158,6 @@ class DetectionResult {
   @override
   String toString() => 'DetectionResult(${detections.length} dets, '
       '${(inferenceMicros / 1000).toStringAsFixed(1)}ms, $modelName'
-      '${isDegraded ? ', DEGRADED: $degradedReason' : ''})';
+      '${isDegraded ? ', DEGRADED: $degradedReason' : ''}'
+      '${isSaturated ? ', SATURATED' : ''})';
 }

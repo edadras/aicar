@@ -9,8 +9,12 @@ import '../core/logging.dart';
 import 'model_catalog.dart';
 import 'model_descriptor.dart';
 
-/// A model file present on the device, paired with the descriptor that says
-/// how to run it.
+/// A model available on the device, paired with the descriptor that says how
+/// to run it.
+///
+/// Two things can back one: a file the user installed into the model
+/// directory, or an asset compiled into the APK. The rest of the app does not
+/// care which — only [uninstall] does, because an asset cannot be deleted.
 class InstalledModel {
   const InstalledModel({
     required this.descriptor,
@@ -19,10 +23,24 @@ class InstalledModel {
     required this.installedAt,
   });
 
+  /// A model that ships inside the APK. It has no [file]: the native runtime
+  /// resolves [ModelDescriptor.assetOrFilePath] against the asset bundle.
+  InstalledModel.bundled(this.descriptor)
+      : file = null,
+        sizeBytes = descriptor.sizeBytes ?? 0,
+        installedAt = null;
+
   final ModelDescriptor descriptor;
-  final File file;
+
+  /// The backing file, or `null` for a bundled asset.
+  final File? file;
   final int sizeBytes;
-  final DateTime installedAt;
+
+  /// When the file landed on disk, or `null` for a bundled asset — it has
+  /// been there since the app was installed.
+  final DateTime? installedAt;
+
+  bool get isBundled => file == null;
 
   String get sizeLabel {
     if (sizeBytes < 1024 * 1024) return '${(sizeBytes / 1024).round()} KB';
@@ -30,15 +48,20 @@ class InstalledModel {
   }
 }
 
-/// Discovers, validates and remembers the models installed on the device.
+/// Discovers, validates and remembers the models available on the device.
 ///
-/// The app ships with no weights. Users drop `.tflite` files into the app's
-/// model directory (via the AI Models screen or `adb push`); the registry
-/// matches each file against [ModelCatalog] by filename, or reads a
-/// `<name>.json` sidecar for models the catalog does not know.
+/// Two sources feed it:
 ///
-/// This is the mechanism that makes the "swap any model without touching the
-/// app" requirement real rather than aspirational.
+///  * the models bundled in the APK, so the app has working perception on
+///    first launch with nothing to download;
+///  * `.tflite` files the user drops into the app's model directory (via the
+///    AI Models screen or `adb push`), matched against [ModelCatalog] by
+///    filename or described by a `<name>.json` sidecar.
+///
+/// An installed file **shadows** a bundled model with the same id: a user who
+/// pushes a newer export expects it to be the one that runs. This is the
+/// mechanism that makes the "swap any model without touching the app"
+/// requirement real rather than aspirational.
 class ModelRegistry {
   ModelRegistry({Directory? modelDirectory}) : _explicitDir = modelDirectory;
 
@@ -106,9 +129,11 @@ class ModelRegistry {
         }
       }
 
-      // 2. Otherwise match the catalog by the filename it expects.
+      // 2. Otherwise match the catalog by the filename it expects. Compare
+      //    basenames: a bundled entry carries a full asset key, and a user
+      //    pushing a newer export of it drops a bare filename in here.
       descriptor ??= ModelCatalog.all.values.cast<ModelDescriptor?>().firstWhere(
-            (ModelDescriptor? d) => d!.assetOrFilePath == fileName,
+            (ModelDescriptor? d) => p.basename(d!.assetOrFilePath) == fileName,
             orElse: () => null,
           );
 
@@ -135,6 +160,18 @@ class ModelRegistry {
       Log.info(_tag, 'found ${descriptor.id} (${stat.size ~/ 1024} KB)');
     }
 
+    // Bundled assets fill in behind whatever the user installed: an installed
+    // file with the same id wins, because it is the more deliberate choice.
+    for (final ModelDescriptor d in ModelCatalog.all.values) {
+      if (!d.isBundledAsset) continue;
+      if (_installed.containsKey(d.id)) {
+        Log.info(_tag, 'bundled ${d.id} shadowed by an installed file');
+        continue;
+      }
+      _installed[d.id] = InstalledModel.bundled(d);
+      Log.info(_tag, 'bundled ${d.id} available');
+    }
+
     await _loadSelection();
   }
 
@@ -148,14 +185,24 @@ class ModelRegistry {
         _selection.remove(role);
       }
     }
-    // Auto-select when exactly one model can fill a role: the common case is
-    // a user who installed one detector and expects it to just work.
+    // Auto-select a role the user has not chosen for. A user who installs one
+    // detector expects it to just work, and a role with a bundled model should
+    // never sit idle — but an ambiguous set of installed files is the user's
+    // call, so we fall back to the bundled model rather than guessing between
+    // them.
     for (final ModelRole role in ModelRole.values) {
       if (_selection.containsKey(role)) continue;
       final List<InstalledModel> candidates = forRole(role);
-      if (candidates.length == 1) {
-        _selection[role] = candidates.first.descriptor.id;
-      }
+      final List<InstalledModel> pushed = candidates
+          .where((InstalledModel m) => !m.isBundled)
+          .toList();
+      final InstalledModel? pick = pushed.length == 1
+          ? pushed.first
+          : candidates
+              .cast<InstalledModel?>()
+              .firstWhere((InstalledModel? m) => m!.isBundled,
+                  orElse: () => null);
+      if (pick != null) _selection[role] = pick.descriptor.id;
     }
   }
 
@@ -208,7 +255,7 @@ class ModelRegistry {
     final InstalledModel? installed = descriptor == null
         ? _installed.values
             .cast<InstalledModel?>()
-            .firstWhere((InstalledModel? m) => m!.file.path == target.path,
+            .firstWhere((InstalledModel? m) => m!.file?.path == target.path,
                 orElse: () => null)
         : _installed[descriptor.id];
     if (installed == null) {
@@ -223,10 +270,17 @@ class ModelRegistry {
   Future<void> uninstall(String modelId) async {
     final InstalledModel? m = _installed[modelId];
     if (m == null) return;
-    if (await m.file.exists()) await m.file.delete();
+    final File? file = m.file;
+    if (file == null) {
+      throw ArgumentError(
+        '$modelId ships inside the app and cannot be uninstalled. '
+        'Select a different model for its role instead.',
+      );
+    }
+    if (await file.exists()) await file.delete();
     final File sidecar = File(
-      p.join(m.file.parent.path,
-          '${p.basenameWithoutExtension(m.file.path)}.json'),
+      p.join(file.parent.path,
+          '${p.basenameWithoutExtension(file.path)}.json'),
     );
     if (await sidecar.exists()) await sidecar.delete();
     for (final ModelRole role in ModelRole.values) {

@@ -193,9 +193,16 @@ class YoloDecoder {
     return out;
   }
 
-  /// TFLite Object Detection API: four parallel tensors.
-  /// boxes `[1, N, 4]` as (ymin, xmin, ymax, xmax) already normalised,
+  /// TFLite Object Detection API head (SSD MobileNet, EfficientDet-Lite):
+  /// four parallel tensors — boxes `[1, N, 4]` as (ymin, xmin, ymax, xmax),
   /// classes `[1, N]`, scores `[1, N]`, count `[1]`.
+  ///
+  /// The boxes are normalised to the **input tensor**, not to the original
+  /// frame. When the frame was letterboxed to reach that tensor, the padding
+  /// has to be undone or every box is shifted and squashed — which does not
+  /// throw, it just looks like a badly trained model. [letterbox] carries the
+  /// transform that was applied; pass `null` when the frame was stretched
+  /// straight to the input size, which is what these heads actually expect.
   static List<Detection> decodeSsd({
     required Float32List boxes,
     required Float32List classes,
@@ -206,6 +213,9 @@ class YoloDecoder {
     required double scoreThreshold,
     required int frameId,
     required int timestampMicros,
+    LetterboxResult? letterbox,
+    int originalWidth = 0,
+    int originalHeight = 0,
   }) {
     final List<Detection> out = <Detection>[];
     final int n = math.min(count, scores.length);
@@ -219,10 +229,21 @@ class YoloDecoder {
       final ObjectClass? cls = mapping.map(label);
       if (cls == null) continue;
 
-      final double ymin = boxes[i * 4];
-      final double xmin = boxes[i * 4 + 1];
-      final double ymax = boxes[i * 4 + 2];
-      final double xmax = boxes[i * 4 + 3];
+      double ymin = boxes[i * 4];
+      double xmin = boxes[i * 4 + 1];
+      double ymax = boxes[i * 4 + 2];
+      double xmax = boxes[i * 4 + 3];
+
+      if (letterbox != null && originalWidth > 0 && originalHeight > 0) {
+        final (double l, double t) = letterbox.toOriginalNormalized(
+            xmin, ymin, originalWidth, originalHeight);
+        final (double r, double b) = letterbox.toOriginalNormalized(
+            xmax, ymax, originalWidth, originalHeight);
+        xmin = l;
+        ymin = t;
+        xmax = r;
+        ymax = b;
+      }
 
       out.add(Detection(
         objectClass: cls,
@@ -234,6 +255,26 @@ class YoloDecoder {
       ));
     }
     return out;
+  }
+
+  /// Whether an SSD-style head ran out of output slots on this frame.
+  ///
+  /// The postprocess op writes a fixed number of slots and reports how many
+  /// it filled, so "filled them all" is only suspicious when the weakest box
+  /// it returned still cleared [scoreThreshold]: that means the ranking was
+  /// cut off mid-way through boxes we would have kept, not that the tail was
+  /// zero-score padding.
+  static bool isSsdSaturated({
+    required Float32List scores,
+    required int count,
+    required double scoreThreshold,
+  }) {
+    final int capacity = scores.length;
+    if (capacity == 0 || count < capacity) return false;
+    for (int i = 0; i < capacity; i++) {
+      if (scores[i] < scoreThreshold) return false;
+    }
+    return true;
   }
 
   /// Pick the class-label mapping named by a descriptor.

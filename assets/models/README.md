@@ -1,22 +1,40 @@
-# Bundled models (optional)
+# Bundled models
 
-This directory is **empty on purpose**. The app ships with no neural weights:
-they are large, separately licensed, and upgradable independently of the app,
-so the normal way to install one is to copy a `.tflite` file into the app's
-runtime model directory and press refresh on the **AI models** screen. See
-`docs/MODELS.md`.
+## What ships in the APK
 
-If you would rather bake a model into the APK — for a fleet build, or a
-reproducible experiment where the weights must travel with the binary — put
-the `.tflite` file here and set `isBundledAsset: true` in its descriptor. The
-native runtime then loads it through Flutter's asset lookup instead of from
-the filesystem.
+| File | Role | Input | Size | Licence |
+|---|---|---|---|---|
+| `efficientdet_lite0.tflite` | Object detection | 320×320 uint8 | 4.6 MB | Apache-2.0 |
 
-Note that Gradle is configured not to compress `.tflite` files
-(`androidResources { noCompress }` in `android/app/build.gradle.kts`), because
-a compressed asset cannot be memory-mapped and the interpreter would have to
-copy the whole model into the heap.
+That is the only model bundled. It is enough for the app to detect vehicles,
+pedestrians, cyclists, motorcycles and traffic lights the first time it is
+launched, with nothing to download. Every other role (depth, lane, road
+segmentation, sign classification) runs its classical fallback until a model
+is installed — see `docs/MODELS.md`.
 
-The directory itself is tracked (via `.gitkeep`) because `pubspec.yaml`
-declares it as an asset directory, and a Flutter build errors on a declared
-directory that does not exist.
+## Why EfficientDet-Lite0 and not YOLO
+
+YOLOv8 and YOLO11 are better detectors, and the app knows how to run them.
+They are also **AGPL-3.0**, and redistributing their weights inside the APK
+would put this whole application under the AGPL. EfficientDet-Lite0 is
+Apache-2.0, so it can travel with the binary without imposing anything on the
+people who build it.
+
+Installing a YOLO export at runtime is a different act — it is the user's own
+copy, and their own licensing decision. The app supports it fully; see the
+**AI models** screen.
+
+Provenance and full licence text: `NOTICE.md` in this directory.
+
+## Adding another bundled model
+
+Put the `.tflite` file here, add a `ModelDescriptor` to `lib/ai/model_catalog.dart`
+with `isBundledAsset: true` and `assetOrFilePath` set to the asset key
+(`assets/models/<file>.tflite`), and record its provenance and licence in
+`NOTICE.md`. `ModelRegistry.refresh()` picks it up automatically; a model the
+user installs with the same id shadows it.
+
+Gradle is configured not to compress `.tflite` files (`androidResources {
+noCompress }` in `android/app/build.gradle.kts`) because a compressed asset
+cannot be memory-mapped, and the interpreter would otherwise have to copy the
+whole model into the heap.

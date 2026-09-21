@@ -71,6 +71,45 @@ class ImagePreprocessing {
   ///
   /// Bilinear (rather than nearest) matters: detector accuracy on small,
   /// distant objects drops measurably with nearest-neighbour downscaling.
+  /// Convert an interleaved buffer between channel counts.
+  ///
+  /// A model's input tensor has a fixed channel count, and the camera can hand
+  /// us a grayscale frame. Feeding a 1-channel buffer to a 3-channel tensor
+  /// does not fail loudly: the runtime copies what it gets and leaves the rest
+  /// of the tensor holding whatever was there before, so the detector sees a
+  /// third of an image stitched onto the previous frame's remains.
+  static Uint8List toChannels(Uint8List src, int from, int to) {
+    if (from == to) return src;
+    final int pixels = src.length ~/ from;
+    final Uint8List out = Uint8List(pixels * to);
+    if (from == 1) {
+      for (int i = 0; i < pixels; i++) {
+        final int v = src[i];
+        for (int c = 0; c < to; c++) {
+          out[i * to + c] = v;
+        }
+      }
+      return out;
+    }
+    if (to == 1) {
+      for (int i = 0; i < pixels; i++) {
+        final int j = i * from;
+        out[i] = (src[j] * 0.299 + src[j + 1] * 0.587 + src[j + 2] * 0.114)
+            .round()
+            .clamp(0, 255);
+      }
+      return out;
+    }
+    // Widening or narrowing between multi-channel layouts: copy what exists,
+    // repeat the last channel for the rest.
+    for (int i = 0; i < pixels; i++) {
+      for (int c = 0; c < to; c++) {
+        out[i * to + c] = src[i * from + math.min(c, from - 1)];
+      }
+    }
+    return out;
+  }
+
   static Uint8List resize(
     Uint8List src,
     int srcWidth,

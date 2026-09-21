@@ -1,9 +1,28 @@
 # Installing and describing AI models
 
-No neural weights ship with this app. They are large, separately licensed and
-upgradable on their own schedule, and bundling them would tie a model version
-to an app version for no benefit. Instead the app discovers model files at
-runtime.
+## What already ships
+
+One model is compiled into the APK:
+
+| File | Role | Input | Size | Licence |
+|---|---|---|---|---|
+| `assets/models/efficientdet_lite0.tflite` | Object detection | 320x320 uint8 | 4.6 MB | Apache-2.0 |
+
+`ModelRegistry` surfaces it as an installed model with no file behind it, and
+auto-selects it, so detection works on first launch. It cannot be deleted;
+select a different model for the role instead, or install a file with the same
+name to replace it.
+
+Why this one and not YOLOv8, which is a better detector: Ultralytics releases
+YOLOv8 and YOLO11 under **AGPL-3.0**, and redistributing their weights inside
+the APK would put this entire application under the AGPL. EfficientDet-Lite0
+is Apache-2.0. Installing a YOLO export yourself is a different act under
+different terms, and is fully supported. Provenance and licence text for
+what is bundled: [`assets/models/NOTICE.md`](../assets/models/NOTICE.md).
+
+Everything else is discovered at runtime. Model files are large, separately
+licensed and upgradable on their own schedule, and bundling them all would tie
+a model version to an app version for no benefit.
 
 ## Where files go
 
@@ -26,12 +45,18 @@ adb shell "cat /sdcard/Download/yolov8n_float16.tflite | run-as com.aicar.aicar 
 A file whose **name** matches an entry in the catalogue is configured
 automatically. Anything else needs a sidecar (below).
 
+An installed file **shadows** a bundled model of the same id — push a newer
+`efficientdet_lite0.tflite` and it is the one that runs. When a role has
+exactly one installed file, it is selected automatically; when it has several,
+the choice is yours and the bundled model keeps running until you make it.
+
 ## Known models
 
 | Role | File name the catalogue expects | Notes |
 |---|---|---|
-| Object detection | `yolov8n_float16.tflite` | Recommended default. ~10 ms on the S23 GPU at 640². |
-| Object detection | `yolov8s_float16.tflite` | Better on small, distant objects; ~2.5× the cost. |
+| Object detection | `efficientdet_lite0.tflite` | **Bundled.** Apache-2.0, int8 via NNAPI, 25 boxes/frame. |
+| Object detection | `yolov8n_float16.tflite` | Recommended default. ~10 ms on the S23 GPU at 640². AGPL-3.0. |
+| Object detection | `yolov8s_float16.tflite` | Better on small, distant objects; ~2.5× the cost. AGPL-3.0. |
 | Object detection | `yolo11n_float16.tflite` | |
 | Object detection | `ssd_mobilenet_v2_int8.tflite` | Lowest power via NNAPI; misses small objects. |
 | Depth | `midas_v21_small_256.tflite` | Relative inverse depth. |
@@ -113,8 +138,36 @@ For a model the catalogue does not know, put `<name>.json` beside
 | `inputMean` / `inputStd` | Applied per channel as `(x - mean) / std`. The defaults give plain `0..1`. ImageNet normalisation is `[123.675, 116.28, 103.53]` / `[58.395, 57.12, 57.375]`. |
 | `channelsFirst` | `true` for NCHW models. |
 | `delegate` | `gpu` (best for float on Snapdragon), `nnapi` (best for fully-quantised int8), `cpu`. A delegate that fails to compile falls back to CPU automatically. |
+| `inputFit` | `letterbox` or `stretch`. How the frame is fitted to the input tensor, and therefore how boxes are mapped back. Derived from `outputFormat` when omitted — YOLO letterboxes, SSD and EfficientDet stretch, because that is what the TF Object Detection API's `fixed_shape_resizer` does. Set it only for an unusual export. Getting it wrong does not throw; it shifts and squashes every box. |
 | `labelVocabulary` | `coco` or `driving`. Selects the table that maps the model's labels onto this project's `ObjectClass` set. A label with no entry is *dropped*, not forced into `unknown`, so a COCO detector does not fill the world model with sofas. |
 | `extra` | Format-specific: `griddingNum`, `rowAnchorCount`, `laneCount`, `rowAnchorStart`, `rowAnchorEnd`, `outputWidth`, `outputHeight`, `depthScale`, `depthOffset`. |
+
+## SSD and EfficientDet heads
+
+The TFLite Object Detection API export produces four tensors — boxes,
+classes, scores, count — with boxes as `(ymin, xmin, ymax, xmax)` normalised
+to the **input tensor**, not the camera frame. Two things follow.
+
+First, the fit matters: these heads are trained with `fixed_shape_resizer`,
+which stretches, so `inputFit` is `stretch` and the normalised boxes are the
+frame's coordinates directly. Letterboxing one and decoding it as if it had
+been stretched displaces every box by the padding — a bug that looks exactly
+like a poorly-trained model.
+
+Second, the class indices come from the **90-entry** COCO label map, which
+keeps the gaps in the original category ids. Indexing the 80-entry list with
+a 90-map index silently mislabels everything after the first gap: a
+motorcycle becomes an airplane. `coco90Labels` in `lib/ai/model_catalog.dart`
+is a byte-for-byte copy of the bundled model's own embedded `labelmap.txt`.
+Its `???` placeholders have no `ObjectClassMapping` entry, so detections on
+them are dropped.
+
+The postprocess op writes a fixed number of slots — 25 for
+EfficientDet-Lite0. When every slot comes back and even the weakest box
+clears the score threshold, the scene was truncated: the result is flagged
+`isSaturated`, which lowers frame confidence without pretending the detections
+we did get are worthless. A dense intersection is exactly where a silently
+truncated object list does the most damage.
 
 ## Adding a new class vocabulary
 

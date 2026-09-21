@@ -43,6 +43,23 @@ enum ModelOutputFormat {
   classification,
 }
 
+/// How a frame is fitted to the model's input tensor.
+///
+/// This is not cosmetic. A detector's boxes come back normalised to the
+/// *input tensor*, so the fit has to be undone in exactly the way it was
+/// applied. Getting it wrong does not throw — it silently shifts and squashes
+/// every box, which looks like a badly-trained model rather than a bug.
+enum InputFit {
+  /// Preserve aspect ratio, pad the remainder. What YOLO expects, because
+  /// that is how it was trained.
+  letterbox,
+
+  /// Resize straight to the input dimensions, distorting aspect ratio. What
+  /// the TensorFlow Object Detection API's `fixed_shape_resizer` does, so it
+  /// is what SSD and EfficientDet heads expect.
+  stretch,
+}
+
 /// Which compute unit the native runtime should try to use.
 enum InferenceDelegate {
   /// Multi-threaded XNNPACK on the CPU. Always available; the fallback.
@@ -81,11 +98,12 @@ class ModelDescriptor {
     this.scoreThreshold = 0.35,
     this.iouThreshold = 0.45,
     this.labelVocabulary = 'coco',
+    InputFit? inputFit,
     this.isBundledAsset = false,
     this.sizeBytes,
     this.notes,
     this.extra = const <String, dynamic>{},
-  });
+  }) : _inputFit = inputFit;
 
   final String id;
   final String name;
@@ -116,6 +134,22 @@ class ModelDescriptor {
 
   /// Selects the [ObjectClassMapping] used to translate [labels].
   final String labelVocabulary;
+
+  final InputFit? _inputFit;
+
+  /// How the frame is fitted to the input tensor, and therefore how detector
+  /// boxes are mapped back onto it.
+  ///
+  /// Each head has exactly one correct answer, so it is derived from
+  /// [outputFormat] by default rather than left as a knob a descriptor can
+  /// set wrong. An unusual export can still override it.
+  InputFit get inputFit =>
+      _inputFit ??
+      switch (outputFormat) {
+        ModelOutputFormat.yoloV5 || ModelOutputFormat.yoloV8 =>
+          InputFit.letterbox,
+        _ => InputFit.stretch,
+      };
 
   final bool isBundledAsset;
   final int? sizeBytes;
@@ -160,6 +194,7 @@ class ModelDescriptor {
         scoreThreshold: scoreThreshold ?? this.scoreThreshold,
         iouThreshold: iouThreshold ?? this.iouThreshold,
         labelVocabulary: labelVocabulary,
+        inputFit: _inputFit,
         isBundledAsset: isBundledAsset ?? this.isBundledAsset,
         sizeBytes: sizeBytes ?? this.sizeBytes,
         notes: notes,
@@ -186,6 +221,7 @@ class ModelDescriptor {
         'scoreThreshold': scoreThreshold,
         'iouThreshold': iouThreshold,
         'labelVocabulary': labelVocabulary,
+        'inputFit': inputFit.name,
         'isBundledAsset': isBundledAsset,
         if (sizeBytes != null) 'sizeBytes': sizeBytes,
         if (notes != null) 'notes': notes,
@@ -224,6 +260,12 @@ class ModelDescriptor {
         scoreThreshold: (j['scoreThreshold'] as num?)?.toDouble() ?? 0.35,
         iouThreshold: (j['iouThreshold'] as num?)?.toDouble() ?? 0.45,
         labelVocabulary: j['labelVocabulary'] as String? ?? 'coco',
+        inputFit: j['inputFit'] == null
+            ? null
+            : InputFit.values.firstWhere(
+                (InputFit f) => f.name == j['inputFit'],
+                orElse: () => InputFit.letterbox,
+              ),
         isBundledAsset: j['isBundledAsset'] as bool? ?? false,
         sizeBytes: (j['sizeBytes'] as num?)?.toInt(),
         notes: j['notes'] as String?,
