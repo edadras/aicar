@@ -8,6 +8,7 @@ import '../navigation/route.dart';
 import '../perception/detection.dart';
 import '../perception/traffic_light.dart';
 import '../perception/traffic_sign.dart';
+import '../localization/lateral_state.dart';
 import '../road/intersection_detector.dart';
 import '../road/lane.dart';
 import '../road/road_marking.dart';
@@ -49,6 +50,7 @@ class WorldModelBuilder {
     required List<TrafficSign> signs,
     required List<TrafficLight> lights,
     required RegulatoryContext regulatory,
+    LateralState? lateral,
     List<RoadMarking> roadMarkings = const <RoadMarking>[],
     IntersectionEstimate? intersection,
     CorridorEstimate? corridor,
@@ -99,6 +101,7 @@ class WorldModelBuilder {
       trafficSigns: signs,
       trafficLights: lights,
       regulatory: regulatory,
+      lateral: lateral,
       roadMarkings: roadMarkings,
       intersection: intersection,
       routeProgress: routeProgress,

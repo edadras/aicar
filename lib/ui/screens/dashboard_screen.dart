@@ -9,6 +9,7 @@ import '../theme.dart';
 import 'ai_models_screen.dart';
 import 'calibration_screen.dart';
 import 'developer_debug_screen.dart';
+import 'distance_accuracy_screen.dart';
 import 'live_drive_screen.dart';
 import 'navigation_screen.dart';
 import 'performance_screen.dart';
@@ -130,6 +131,17 @@ class DashboardScreen extends StatelessWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) => PerformanceScreen(session: session),
+              ),
+            ),
+          ),
+          _Tile(
+            icon: Icons.straighten,
+            title: 'Distance accuracy',
+            subtitle: 'What the distances are actually worth, measured while '
+                'you drive',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => DistanceAccuracyScreen(session: session),
               ),
             ),
           ),

@@ -276,6 +276,17 @@ class _DeveloperDebugScreenState extends State<DeveloperDebugScreen> {
                           const Text('No junction inferred',
                               style: HudTheme.caption),
                         const SizedBox(height: 6),
+                        _kv('Lateral', result.world.lateral.description),
+                        _kv('Lateral confidence',
+                            '${result.world.lateral.offsetConfidence.percent}%'),
+                        if (result.world.lateral.headingAgreesWithRoad != null)
+                          _kv(
+                            'Heading vs matched road',
+                            result.world.lateral.headingAgreesWithRoad!
+                                ? 'agrees'
+                                : 'DISAGREES — map match suspect',
+                          ),
+                        const SizedBox(height: 6),
                         _kv('Indicator',
                             result.command.turnSignal.signal.label),
                         Builder(builder: (BuildContext context) {

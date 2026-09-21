@@ -168,9 +168,30 @@ commands, and the JSON sidecar format for models the catalogue does not know.
 
 Run the **Calibration** wizard once per mounting position. It takes about two
 minutes and is the highest-leverage thing you can do: every distance, lane
-offset and time-to-collision is computed through the camera model. With
-defaults, a car at 25 m reads anywhere between 20 m and 32 m; calibrated, the
-same estimate is good to about a metre.
+offset and time-to-collision is computed through the camera model, so an
+error in the mounting height or the pitch scales every number downstream.
+
+**How accurate is it?** The honest answer is: measure it, on your phone, on
+your mount, on your road. This repository makes no verified claim about
+metres, because a claim like "a metre at 25 m" depends on your calibration
+and cannot be established from synthetic scenes — and an unverified accuracy
+figure is exactly the kind of confident guess the rest of this project exists
+to avoid.
+
+So the app measures it for you, on every drive, with no props at all. Open
+**Distance accuracy**. For a stationary object the distance must shrink at
+exactly the speed you are travelling, and your speed comes from GPS and the
+IMU, which know nothing about the camera — so every parked car you drive past
+is a free calibration target, and the ratio of measured closure to measured
+speed is the distance estimator's scale error directly. The screen reports
+that scale per distance band, the resulting error in metres, and which
+calibration number to fix: a flat profile is a camera-height error, a rising
+one is a pitch error. Drive a few minutes of ordinary road and it will tell
+you what your distances are worth. Samples export as CSV.
+
+The method is tested by injecting a known scale error into a simulated drive
+and checking the validator recovers it: a 12 % over-read is measured as
+12 % ± 2 %. See `test/validation/distance_validator_test.dart`.
 
 ---
 

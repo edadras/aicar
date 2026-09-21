@@ -50,6 +50,9 @@ import '../world_model/world_model_builder.dart';
 import '../world_model/world_state.dart';
 import 'pipeline_config.dart';
 import 'pipeline_result.dart';
+import '../localization/lateral_estimator.dart';
+import '../localization/lateral_state.dart';
+import '../validation/distance_validator.dart';
 import 'thermal_governor.dart';
 
 /// Runs the full perception → planning → decision → simulation cycle for one
@@ -88,6 +91,8 @@ class PerceptionPipeline {
     IntersectionDetector? intersectionDetector,
     TurnSignalPlanner? turnSignalPlanner,
     ThermalGovernor? governor,
+    DistanceValidator? distanceValidator,
+    LateralEstimator? lateralEstimator,
     SimulatedVehicleController? controller,
     KinematicBicycleModel? vehicleModel,
   })  : config = config ?? const PipelineConfig(),
@@ -109,6 +114,8 @@ class PerceptionPipeline {
         intersectionDetector =
             intersectionDetector ?? const IntersectionDetector(),
         turnSignalPlanner = turnSignalPlanner ?? TurnSignalPlanner(),
+        distanceValidator = distanceValidator ?? DistanceValidator(),
+        lateralEstimator = lateralEstimator ?? LateralEstimator(),
         governor = governor ??
             ThermalGovernor(
               baseTargetFps:
@@ -155,6 +162,15 @@ class PerceptionPipeline {
 
   /// Decides how hard the pipeline may work given heat, battery and latency.
   final ThermalGovernor governor;
+
+  /// Continuously measures how accurate the stack's own distances are, using
+  /// stationary objects and the vehicle's own speed. See
+  /// [DistanceValidator] — this is what turns the accuracy claim into a
+  /// measurement instead of an assertion.
+  final DistanceValidator distanceValidator;
+
+  /// Fuses camera, IMU and map matching into where we are across the road.
+  final LateralEstimator lateralEstimator;
 
   final SimulatedVehicleController controller;
   final KinematicBicycleModel vehicleModel;
@@ -440,6 +456,22 @@ class PerceptionPipeline {
     }
     final List<RoadMarking> markings = roadMarkingTracker.upcoming;
 
+    // --- 9c. lateral position ---------------------------------------------
+    //
+    // Runs after the lanes, because the camera is the only source that
+    // measures this directly; the IMU can bridge a dropout and map matching
+    // can validate the road, but neither can measure the offset.
+    final LateralState lateral = lateralEstimator.update(
+      lanes: lanes,
+      ego: ego,
+      dtSeconds: dt,
+      route: routeProgress,
+    );
+    if (lateral.headingAgreesWithRoad == false) {
+      degraded.add('heading disagrees with the matched road: the map match '
+          'is probably on the wrong road');
+    }
+
     // --- 10. signs and lights --------------------------------------------
     List<TrafficSign> signs = _lastSigns;
     if (toggles.trafficSigns &&
@@ -500,6 +532,7 @@ class PerceptionPipeline {
         signs: signs,
         lights: lights,
         regulatory: regulatoryTracker.context,
+        lateral: lateral,
         roadMarkings: markings,
         intersection: intersection,
         corridor: corridor,
@@ -558,6 +591,7 @@ class PerceptionPipeline {
           signs: signs,
           lights: lights,
           regulatory: regulatoryTracker.context,
+          lateral: lateral,
           roadMarkings: markings,
           intersection: intersection,
           corridor: corridor,
@@ -571,6 +605,18 @@ class PerceptionPipeline {
         ),
       );
     }
+
+    // --- 13b. distance self-check ----------------------------------------
+    //
+    // Runs on the final tracks, after risk annotation, because it wants the
+    // same numbers the HUD showed. Costs nothing: it is arithmetic on data
+    // already computed, and it is the only thing in the pipeline that checks
+    // the stack's own output against an independent measurement.
+    distanceValidator.observe(
+      tracks: tracks,
+      ego: ego,
+      timestampMicros: frame.timestampMicros,
+    );
 
     // --- 14. decision -----------------------------------------------------
     DrivingDecision decision = DrivingDecision(
@@ -782,6 +828,8 @@ class PerceptionPipeline {
     controller.reset();
     regulatoryTracker.reset();
     governor.reset();
+    distanceValidator.reset();
+    lateralEstimator.reset();
     roadMarkingTracker.reset();
     roadMarkingDetector.invalidate();
     turnSignalPlanner.reset();

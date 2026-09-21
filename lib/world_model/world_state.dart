@@ -4,6 +4,7 @@ import '../camera/camera_calibration.dart';
 import '../core/confidence.dart';
 import '../core/geometry.dart';
 import '../depth/depth_map.dart';
+import '../localization/lateral_state.dart';
 import '../navigation/maneuver.dart';
 import '../navigation/route.dart';
 import '../perception/object_class.dart';
@@ -26,7 +27,10 @@ import 'hazard.dart';
 /// a detector — which is what makes them deterministic, replayable and
 /// testable without a device.
 class WorldState {
-  const WorldState({
+  // Not const: [lateral] defaults to a [LateralState], which carries a
+  // [Confidence], which clamps in its initialiser and so cannot be const.
+  // Nothing constructs a WorldState in a constant context anyway.
+  WorldState({
     required this.frameId,
     required this.timestampMicros,
     required this.ego,
@@ -40,6 +44,7 @@ class WorldState {
     required this.regulatory,
     required this.hazards,
     required this.autonomy,
+    LateralState? lateral,
     this.roadMarkings = const <RoadMarking>[],
     this.intersection,
     this.corridor,
@@ -48,7 +53,7 @@ class WorldState {
     this.segmentation,
     this.ambientLuminance = 128,
     this.degradedSubsystems = const <String>[],
-  });
+  }) : lateral = lateral ?? LateralState.unknownState;
 
   /// An empty world, used before the first frame and on a hard reset.
   factory WorldState.initial() => WorldState(
@@ -76,6 +81,15 @@ class WorldState {
 
   final EgoMotionState ego;
   final CameraCalibration calibration;
+
+  /// Where we are across the road, and how much of that is actually known.
+  ///
+  /// Deliberately separate from [ego], which is longitudinal: speed, heading
+  /// and yaw are fused from GPS and the IMU, while lateral position is a
+  /// camera measurement that those two can only bridge. Conflating them
+  /// would let a good speed fix lend credibility to a lane position nothing
+  /// observed.
+  final LateralState lateral;
 
   // --- Road ---------------------------------------------------------------
 
@@ -257,6 +271,7 @@ class WorldState {
     CorridorEstimate? corridor,
     List<RoadMarking>? roadMarkings,
     IntersectionEstimate? intersection,
+    LateralState? lateral,
     List<String>? degradedSubsystems,
   }) =>
       WorldState(
@@ -271,6 +286,7 @@ class WorldState {
         trafficSigns: trafficSigns,
         trafficLights: trafficLights,
         regulatory: regulatory,
+        lateral: lateral ?? this.lateral,
         roadMarkings: roadMarkings ?? this.roadMarkings,
         intersection: intersection ?? this.intersection,
         hazards: hazards ?? this.hazards,
@@ -303,6 +319,7 @@ class WorldState {
           for (final TrafficLight l in trafficLights) l.toJson(),
         ],
         'regulatory': regulatory.toJson(),
+        'lateral': lateral.toJson(),
         if (roadMarkings.isNotEmpty)
           'markings': <Map<String, dynamic>>[
             for (final RoadMarking m in roadMarkings) m.toJson(),
@@ -385,6 +402,7 @@ class WorldState {
       ],
       regulatory: _regulatoryFromJson(
           j['regulatory'] as Map<String, dynamic>?),
+      lateral: LateralState.fromJson(j['lateral'] as Map<String, dynamic>?),
       roadMarkings: <RoadMarking>[
         for (final dynamic m
             in (j['markings'] as List<dynamic>? ?? const <dynamic>[]))
