@@ -57,15 +57,61 @@ wheel that turns with the simulated command.
 
 ---
 
-## Running it
+## Installing it on a phone
+
+### Requirements
+
+| | |
+|---|---|
+| Android | **8.0 (API 26)** or newer |
+| Architecture | arm64 (any modern phone, including the S23) |
+| Sensors | rear camera, accelerometer and gyroscope are **required**; GNSS and magnetometer are optional |
+| Free space | ~120 MB for the app, plus ~2 GB per hour if you record drives with frames |
+
+Nothing else needs installing on the phone. No root, no Termux, no separate
+runtime, no companion app. TensorFlow Lite and its GPU/NNAPI delegates are
+linked into the APK.
+
+### Build and install
 
 ```bash
 flutter pub get
-flutter run --release          # release: the debug build is much slower
+
+# One APK for your own phone, straight over USB:
+flutter run --release            # debug builds are several times slower
+
+# Or produce an installable APK. --split-per-abi gives a 25 MB arm64 APK
+# instead of a 70 MB fat one, because the TensorFlow Lite AAR ships native
+# libraries for three architectures.
+flutter build apk --release --split-per-abi
+adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
-The app works immediately with **no model files installed** — see below for
-exactly which capabilities that costs.
+Release builds are currently signed with the **debug key** so the above works
+with no setup. That is fine for a research build installed over USB; a phone
+installing the APK from a file manager will need "install unknown apps"
+enabled for that file manager. Replace `signingConfig` in
+`android/app/build.gradle.kts` before distributing it to anyone else.
+
+### First run
+
+1. **Grant camera access.** It is mandatory — without it there is nothing to
+   perceive. Location is optional: refusing it costs absolute speed accuracy
+   and navigation, and nothing else.
+2. **Run the Calibration wizard.** Two minutes, once per mounting position.
+   Every distance depends on it.
+3. **Optionally install a detector.** The app runs without one, but nothing
+   will be detected until you do — see the table below and
+   [docs/MODELS.md](docs/MODELS.md).
+
+### Permissions the app requests
+
+`CAMERA`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `WAKE_LOCK`,
+`INTERNET`, `ACCESS_NETWORK_STATE` — and nothing else. The CameraX plugin's
+`RECORD_AUDIO` and external-storage permissions are explicitly removed from
+the merged manifest: this app never records audio and never writes outside
+its own private directory, so the list a user sees at install matches what the
+app can actually do.
 
 ### Installing AI models
 

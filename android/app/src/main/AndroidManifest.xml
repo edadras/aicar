@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         Camera is the primary sensor: everything the stack perceives comes
@@ -29,6 +30,31 @@
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="true" />
     <uses-feature android:name="android.hardware.sensor.compass" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!--
+        PERMISSIONS REMOVED FROM THE MERGED MANIFEST.
+
+        The CameraX plugin declares RECORD_AUDIO and WRITE_EXTERNAL_STORAGE
+        because it also supports video recording. This app only ever consumes
+        an image stream (`enableAudio: false`), never records video, and never
+        writes to shared storage — recordings go to the app's own private
+        directory. Leaving those permissions in the merged manifest would make
+        the app appear to request the microphone, which for a tool whose whole
+        claim is that it has no hidden capabilities would be exactly the wrong
+        signal. They are removed rather than merely unused, so the permission
+        list a user sees at install matches what the app can actually do.
+
+        The plugin's READ_PHONE_STATE is likewise dropped: nothing here reads
+        telephony state.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"
+        tools:node="remove" />
 
     <!--
         NOTE ON WHAT IS DELIBERATELY ABSENT.

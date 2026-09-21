@@ -30,12 +30,12 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        ndk {
-            // The Galaxy S23 is arm64. Shipping only the ABIs that can
-            // actually run this keeps the APK from doubling in size for
-            // architectures no target device uses.
-            abiFilters.add("arm64-v8a")
-        }
+        // No ndk.abiFilters here on purpose. It does not filter the prebuilt
+        // JNI libraries that arrive from plugin AARs (TensorFlow Lite's, in
+        // particular), so it does not shrink the APK the way it looks as
+        // though it should — and setting it makes Gradle reject Flutter's
+        // own `--split-per-abi`, which is the supported way to produce a
+        // per-architecture build. Use the build flags in README.md instead.
     }
 
     // TFLite models are already compressed; letting the packager compress
