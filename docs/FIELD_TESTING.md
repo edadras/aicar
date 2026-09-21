@@ -115,7 +115,20 @@ The one that decides whether the app is usable at all.
 * That last one is the test for `SignalRelevanceResolver`. Confirm the cross
   street's red does not become ours.
 
-### 9. Speed limits
+### 9. The alerts themselves
+
+The hardest thing to test synthetically, because the failure is behavioural
+rather than technical: an alert policy is wrong when a driver starts ignoring
+it, and no unit test can see that.
+
+* Drive an hour in ordinary traffic with **Drive mode** and audio on.
+* Count how many times it spoke. If you stopped noticing, it said too much.
+* Note any alert that arrived too late to act on — that is the one number
+  that matters, and it is not in any log.
+* Confirm the screen and the speaker never disagreed: they are driven by the
+  same policy, so a difference is a bug.
+
+### 10. Speed limits
 
 * A road where the limit changes, and one with a gantry sign applying to a
   different lane.

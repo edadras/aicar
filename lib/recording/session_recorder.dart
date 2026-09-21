@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../camera/camera_frame.dart';
 import '../core/logging.dart';
 import '../core/profiling.dart';
+import '../debug/system_monitor.dart';
 import '../decision/driving_decision.dart';
 import '../pipeline/pipeline_result.dart';
 import '../sensors/ego_motion.dart';
@@ -219,6 +220,20 @@ class SessionRecorder {
       type: RecordType.gps,
       timestampMicros: fix.timestampMicros,
       payload: fix.toJson(),
+    ));
+  }
+
+  /// Record a device-health sample.
+  ///
+  /// Written on the monitor's own clock rather than per frame. Without it a
+  /// slow recording is ambiguous between a slow phone and a hot one, and
+  /// those call for completely different fixes.
+  void recordDevice(SystemSample sample) {
+    if (!_recording) return;
+    _write(SessionRecord(
+      type: RecordType.device,
+      timestampMicros: sample.timestamp.microsecondsSinceEpoch,
+      payload: sample.toJson(),
     ));
   }
 

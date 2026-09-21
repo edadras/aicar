@@ -94,6 +94,10 @@ class SystemMonitor {
   Timer? _timer;
   SystemSample? _latest;
 
+  /// Called for every sample, so a recording can carry device health on the
+  /// monitor's own clock.
+  void Function(SystemSample)? onSample;
+
   SystemSample? get latest => _latest;
   List<SystemSample> get history => _history.toList();
 
@@ -143,6 +147,7 @@ class SystemMonitor {
       );
       _latest = sample;
       _history.add(sample);
+      onSample?.call(sample);
 
       if (sample.thermal.isThrottling) {
         Log.warn(_tag,

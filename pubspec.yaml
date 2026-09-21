@@ -44,6 +44,10 @@ dependencies:
 
   # --- Media --------------------------------------------------------------
   image: ^4.3.0
+  # Driver-facing alerts. Tones for urgency, speech for information — see
+  # lib/audio/driving_alerts.dart for why both are needed.
+  audioplayers: ^6.1.0
+  flutter_tts: ^4.2.0
 
   cupertino_icons: ^1.0.8
 

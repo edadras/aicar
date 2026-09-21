@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../pipeline/pipeline_result.dart';
 import '../../recording/session_recorder.dart';
 import '../driving_session.dart';
+import '../hud/drive_mode_hud.dart';
 import '../hud/hud_panels.dart';
 import '../hud/perception_overlay.dart';
 import '../theme.dart';
@@ -53,28 +56,48 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
     final DrivingSession session = context.watch<DrivingSession>();
     final PipelineResult? result = session.latest;
 
+    // Drive mode strips the instrument panel back to what can be read at a
+    // glance. Everything it hides is still recorded, and Replay is where it
+    // is meant to be read.
+    final bool minimal = session.minimalHud;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           _buildCameraLayer(session),
-          if (result != null) _buildOverlay(session, result),
+          if (result != null && !minimal) _buildOverlay(session, result),
           _buildTopBar(session, result),
-          if (result != null) _buildSidePanels(session, result),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: result == null
-                ? _buildWaiting(session)
-                : ControlStrip(
-                    result: result,
-                    steeringRatio: session.config.vehicle.steeringRatio,
-                    steeringLimitDegrees: session.config.steeringLimitDegrees,
-                  ),
-          ),
-          if (_showDebug && result != null)
+          if (result != null && !minimal) _buildSidePanels(session, result),
+          if (result != null && minimal)
+            DriveModeHud(
+              result: result,
+              alert: session.alerts.current,
+              audioEnabled: session.alerts.enabled,
+            ),
+          if (!minimal)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: result == null
+                  ? _buildWaiting(session)
+                  : ControlStrip(
+                      result: result,
+                      steeringRatio: session.config.vehicle.steeringRatio,
+                      steeringLimitDegrees:
+                          session.config.steeringLimitDegrees,
+                    ),
+            ),
+          if (minimal && result == null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildWaiting(session),
+            ),
+          if (_showDebug && result != null && !minimal)
             Positioned(
               right: 12,
               bottom: 130,
@@ -146,6 +169,11 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
   }
 
   Widget _buildTopBar(DrivingSession session, PipelineResult? result) {
+    // In drive mode the bar carries only what is needed to get out of it and
+    // to silence it. Counters and toggles are exactly the sort of thing that
+    // pulls a driver's eyes off the road.
+    final bool minimal = session.minimalHud;
+
     return Positioned(
       top: 0,
       left: 0,
@@ -161,6 +189,36 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
                     icon: Icons.arrow_back,
                     onPressed: () => Navigator.of(context).pop(),
                   ),
+                  const SizedBox(width: 8),
+                  _RoundButton(
+                    icon: minimal
+                        ? Icons.dashboard_customize_outlined
+                        : Icons.directions_car_filled_outlined,
+                    color: minimal ? HudTheme.accent : HudTheme.textPrimary,
+                    onPressed: () => session.setMinimalHud(!minimal),
+                  ),
+                  const SizedBox(width: 6),
+                  _RoundButton(
+                    icon: session.alerts.enabled
+                        ? Icons.volume_up_outlined
+                        : Icons.volume_off_outlined,
+                    color: session.alerts.enabled
+                        ? HudTheme.textPrimary
+                        : HudTheme.caution,
+                    onPressed: () => unawaited(
+                      session.enableAudioAlerts(!session.alerts.enabled),
+                    ),
+                  ),
+                  if (minimal) ...<Widget>[
+                    const Spacer(),
+                    if (session.isRecording)
+                      HudBadge(
+                        text: 'REC',
+                        color: HudTheme.critical,
+                        filled: true,
+                        icon: Icons.fiber_manual_record,
+                      ),
+                  ] else ...<Widget>[
                   const SizedBox(width: 8),
                   const SimulationOnlyBadge(compact: true),
                   const SizedBox(width: 8),
@@ -205,9 +263,10 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
                         : HudTheme.textPrimary,
                     onPressed: () => _toggleRecording(session),
                   ),
+                  ],
                 ],
               ),
-              if (result != null) ...<Widget>[
+              if (result != null && !minimal) ...<Widget>[
                 const SizedBox(height: 8),
                 HazardBanner(world: result.world, pulse: _pulse.value),
               ],

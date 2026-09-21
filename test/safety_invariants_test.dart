@@ -152,6 +152,31 @@ void main() {
       expect(manifest.contains('usb_device_attached'), isFalse);
     });
 
+    test('the manifest still removes the microphone and shared storage', () {
+      // Audio *output* was added for driver alerts. Audio input was not, and
+      // the difference has to stay visible in the permission list a user sees
+      // at install — a driving tool that appears to want the microphone has
+      // lost the argument before it starts.
+      final String manifest =
+          File('android/app/src/main/AndroidManifest.xml')
+              .readAsStringSync();
+
+      for (final String permission in <String>[
+        'RECORD_AUDIO',
+        'WRITE_EXTERNAL_STORAGE',
+        'READ_EXTERNAL_STORAGE',
+        'READ_PHONE_STATE',
+      ]) {
+        // Match the declaration, not the comment that explains it.
+        final RegExp declaration = RegExp(
+          '<uses-permission\\s+android:name='
+          '"android\\.permission\\.$permission"\\s+tools:node="remove"',
+        );
+        expect(declaration.hasMatch(manifest), isTrue,
+            reason: '$permission must be removed, not merely unused');
+      }
+    });
+
     test('no vehicle-bus package is declared as a dependency', () {
       final String pubspec =
           File('pubspec.yaml').readAsStringSync().toLowerCase();

@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../../recording/session_store.dart';
+import '../../recording/telemetry_export.dart';
 import '../driving_session.dart';
 import '../theme.dart';
 import 'replay_screen.dart';
@@ -176,6 +180,12 @@ class _RecordedDrivesScreenState extends State<RecordedDrivesScreen> {
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton.icon(
+                            onPressed: () => _telemetry(s),
+                            icon: const Icon(Icons.insights, size: 18),
+                            label: const Text('Telemetry'),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton.icon(
                             onPressed: () => _delete(s),
                             icon: const Icon(Icons.delete_outline, size: 18),
                             label: const Text('Delete'),
@@ -189,6 +199,61 @@ class _RecordedDrivesScreenState extends State<RecordedDrivesScreen> {
             },
           );
         },
+      ),
+    );
+  }
+
+  /// Summarise how a recorded drive actually ran, and offer the CSV.
+  ///
+  /// This is where a performance question gets settled. The recording already
+  /// contains per-cycle latency, stage timings, the governor's decision and
+  /// device health on its own clock — what was missing was a way to get it
+  /// off the phone.
+  Future<void> _telemetry(RecordedSession s) async {
+    const TelemetryExporter exporter = TelemetryExporter();
+    TelemetrySummary? summary;
+    String? error;
+    try {
+      summary = await exporter.summarise(s.streamFile);
+    } catch (e) {
+      error = '$e';
+    }
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('How this drive ran'),
+        content: SingleChildScrollView(
+          child: Text(
+            error ?? summary!.report,
+            style: HudTheme.caption.copyWith(
+              fontFamily: HudTheme.monoFamily,
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          if (error == null)
+            FilledButton(
+              onPressed: () async {
+                final NavigatorState nav = Navigator.of(context);
+                final ScaffoldMessengerState messenger =
+                    ScaffoldMessenger.of(context);
+                final File out =
+                    File(p.join(s.directory.path, 'telemetry.csv'));
+                await out.writeAsString(await exporter.toCsv(s.streamFile));
+                nav.pop();
+                messenger.showSnackBar(
+                  SnackBar(content: Text('Written to ${out.path}')),
+                );
+              },
+              child: const Text('Export CSV'),
+            ),
+        ],
       ),
     );
   }

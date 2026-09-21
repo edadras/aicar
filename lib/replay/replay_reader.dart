@@ -156,6 +156,9 @@ class ReplayReader {
         case RecordType.sessionFooter:
         case RecordType.marker:
         case RecordType.vehicle:
+        // Device health belongs to the session, not to any one frame, so it
+        // is read by the telemetry exporter rather than replayed.
+        case RecordType.device:
           break;
       }
     }

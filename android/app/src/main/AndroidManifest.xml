@@ -46,6 +46,14 @@
 
         The plugin's READ_PHONE_STATE is likewise dropped: nothing here reads
         telephony state.
+
+        The audio plugins add no user-facing permission at all — playback and
+        text-to-speech need none. They do contribute a signature-level
+        `com.aicar.aicar.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which
+        AndroidX generates so an app's own dynamically-registered broadcast
+        receivers are not exported. It is granted only to this app's own
+        signature, is invisible in the install dialog, and is noted here so
+        that seeing it in an `aapt dump` is not a surprise.
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"
         tools:node="remove" />

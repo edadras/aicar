@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -193,6 +195,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ],
               ),
+            ),
+          ),
+
+          const SectionHeader(
+            'While driving',
+            subtitle: 'What reaches you at the wheel, and how',
+          ),
+          Card(
+            child: Column(
+              children: <Widget>[
+                SwitchListTile(
+                  title: const Text('Drive mode HUD', style: HudTheme.body),
+                  subtitle: const Text(
+                    'Speed, one alert and the indicators — nothing else. The '
+                    'full instrument panel is still recorded and is meant to '
+                    'be read in Replay, not at 100 km/h.',
+                    style: HudTheme.caption,
+                  ),
+                  value: session.minimalHud,
+                  onChanged: session.setMinimalHud,
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  title: const Text('Audio alerts', style: HudTheme.body),
+                  subtitle: const Text(
+                    'Tones for urgency, speech for information. Deliberately '
+                    'sparing: one alert at a time, said once, and cautions no '
+                    'more than every twenty seconds — a system that announces '
+                    'everything gets tuned out.',
+                    style: HudTheme.caption,
+                  ),
+                  value: session.alerts.enabled,
+                  onChanged: (bool v) =>
+                      unawaited(session.enableAudioAlerts(v)),
+                ),
+              ],
             ),
           ),
 

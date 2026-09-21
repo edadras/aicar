@@ -63,6 +63,32 @@ wheel that turns with the simulated command. Down the left, the simulated
 indicators blink when the stack would be signalling, with the reason next to
 them.
 
+### Drive mode
+
+All of that is an instrument panel, and reading an instrument panel is not
+something to do at 100 km/h. **Drive mode** (the car icon in the HUD bar, or
+Settings) strips the screen back to three things: the speed, the one thing
+that matters right now, and the indicators. Everything else is still
+recorded, and Replay is where it is meant to be read.
+
+Alerts are spoken. Tones carry urgency — a speech engine takes a few hundred
+milliseconds to start, which is fine for "speed bump ahead" and far too slow
+for a collision warning — and speech carries information. The policy is
+deliberately sparing, because a system that announces everything gets tuned
+out inside a minute and then the one alert that mattered is missed too:
+
+- one alert at a time, the most urgent;
+- each situation announced **once**, and re-announced only after it has
+  genuinely cleared, not because a TTC flickered across a threshold;
+- cautions no more than once every twenty seconds;
+- nothing said about what the driver is already looking at — a red light you
+  are stopped at is not news;
+- anything urgent interrupts anything leisurely rather than queueing behind
+  it.
+
+Audio is an addition to the screen, never a replacement. A phone with no
+speech voice installed still shows every alert.
+
 ### Reading the road
 
 The stack does not only avoid things — it reads the road the way a driver
@@ -109,9 +135,9 @@ flutter pub get
 # One APK for your own phone, straight over USB:
 flutter run --release            # debug builds are several times slower
 
-# Or produce an installable APK. --split-per-abi gives a 30 MB arm64 APK
-# instead of a 74 MB fat one, because the TensorFlow Lite AAR ships native
-# libraries for three architectures.
+# Or produce an installable APK. --split-per-abi gives a 37 MB arm64 APK
+# instead of a fat one carrying all three, because the TensorFlow Lite AAR
+# ships native libraries for every architecture.
 flutter build apk --release --split-per-abi
 adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
@@ -137,7 +163,9 @@ enabled for that file manager. Replace `signingConfig` in
 ### Permissions the app requests
 
 `CAMERA`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `WAKE_LOCK`,
-`INTERNET`, `ACCESS_NETWORK_STATE` — and nothing else. The CameraX plugin's
+`INTERNET`, `ACCESS_NETWORK_STATE` — and nothing else. Audio *output* for
+driver alerts needs no permission; audio *input* is not requested and the
+microphone permission is explicitly removed from the merged manifest. The CameraX plugin's
 `RECORD_AUDIO` and external-storage permissions are explicitly removed from
 the merged manifest: this app never records audio and never writes outside
 its own private directory, so the list a user sees at install matches what the
@@ -145,10 +173,25 @@ app can actually do.
 
 ### AI models
 
-One detector ships in the APK: **EfficientDet-Lite0** (COCO, 320x320, int8,
-4.6 MB, Apache-2.0). It is selected automatically on first launch, so the app
-detects vehicles, pedestrians, cyclists, motorcycles and traffic lights with
-nothing to download.
+Two detectors ship in the APK, both Apache-2.0:
+
+| | Input | Size | |
+|---|---|---|---|
+| **EfficientDet-Lite0** | 320x320 int8 | 4.6 MB | default |
+| **EfficientDet-Lite2** | 448x448 int8 | 7.6 MB | accuracy option |
+
+Lite0 is selected automatically on first launch, so the app detects vehicles,
+pedestrians, cyclists, motorcycles and traffic lights with nothing to
+download. Lite2 is the better detector and is deliberately not the default:
+448x448 is roughly twice the compute, and on a phone clamped to a windscreen
+that difference is heat rather than accuracy. Switch on the **AI models**
+screen and watch **Performance → Thermal governor**.
+
+Models too large to bundle are offered as an in-app download — MiDaS v2.1
+small is 63 MB, which would more than triple the APK for a capability most
+drives do not need. The size and licence are shown, the download is confirmed
+every time, and the SHA-256 is verified before installing: wrong weights do
+not fail loudly, they produce confident nonsense.
 
 It is deliberately the *bundleable* detector rather than the best one.
 YOLOv8 and YOLO11 are stronger and the app knows how to run them, but they

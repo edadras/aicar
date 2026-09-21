@@ -13,6 +13,8 @@ import '../camera/camera_service.dart';
 import '../camera/frame_scheduler.dart';
 import '../camera/image_preprocessing.dart';
 import '../core/logging.dart';
+import '../audio/device_alert_sink.dart';
+import '../audio/driving_alerts.dart';
 import '../debug/system_monitor.dart';
 import '../core/profiling.dart';
 import '../navigation/navigation_service.dart';
@@ -63,6 +65,43 @@ class DrivingSession extends ChangeNotifier {
 
   final SensorHub sensors = SensorHub();
   final SystemMonitor systemMonitor = SystemMonitor();
+
+  /// Spoken and tonal alerts.
+  ///
+  /// Created with a silent sink so tests and desktop builds never touch the
+  /// audio stack; [enableAudioAlerts] swaps in the real one on demand.
+  DrivingAlerts alerts = DrivingAlerts(sink: const SilentAlertSink());
+
+  /// Strip the HUD back to what a driver can read at a glance.
+  ///
+  /// The full HUD is an instrument panel, and reading an instrument panel is
+  /// not something to do at 100 km/h. In drive mode the screen carries the
+  /// speed, the one thing that matters right now, and the indicators —
+  /// everything else moves to Replay, where there is time to look at it.
+  bool minimalHud = false;
+
+  /// Turn on real audio output. Best-effort: a device with no speech engine
+  /// keeps every alert on screen.
+  Future<void> enableAudioAlerts(bool enabled) async {
+    if (!enabled) {
+      alerts.enabled = false;
+      return;
+    }
+    if (alerts.sink is SilentAlertSink) {
+      final DeviceAlertSink sink = DeviceAlertSink();
+      await sink.initialise();
+      await alerts.dispose();
+      alerts = DrivingAlerts(sink: sink);
+    }
+    alerts.enabled = true;
+    notifyListeners();
+  }
+
+  void setMinimalHud(bool value) {
+    if (minimalHud == value) return;
+    minimalHud = value;
+    notifyListeners();
+  }
   late final CameraService camera = CameraService(clock: sensors.clock);
   final FrameScheduler scheduler = FrameScheduler();
 
@@ -183,6 +222,7 @@ class DrivingSession extends ChangeNotifier {
       _gpsSub = sensors.gpsFixes.listen(_onGpsFix);
       _imuSub = sensors.rawImuSamples.listen(_onImuSample);
 
+      systemMonitor.onSample = (SystemSample s) => _recorder?.recordDevice(s);
       systemMonitor.start();
       await camera.startStream();
       _setState(DrivingSessionState.running);
@@ -203,6 +243,7 @@ class DrivingSession extends ChangeNotifier {
     _imuSub = null;
 
     systemMonitor.stop();
+    alerts.reset();
     await camera.stopStream();
     await sensors.stop();
     if (isRecording) await stopRecording();
@@ -296,6 +337,8 @@ class DrivingSession extends ChangeNotifier {
         scheduler.targetFps = plan.targetFps;
       }
 
+      alerts.update(world: result.world, decision: result.decision);
+
       _latest = result;
       _latestFrame = frame;
       _recorder?.recordResult(result, frame: frame);
@@ -371,6 +414,7 @@ class DrivingSession extends ChangeNotifier {
   @override
   Future<void> dispose() async {
     await stop();
+    await alerts.dispose();
     await _pipeline?.dispose();
     await camera.close();
     await sensors.dispose();

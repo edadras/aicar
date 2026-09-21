@@ -26,6 +26,14 @@ enum RecordType {
   control('control'),
   vehicle('vehicle'),
   performance('perf'),
+
+  /// Battery, thermal status and thermal headroom.
+  ///
+  /// Its own record type rather than a field on [performance], because it is
+  /// sampled on its own slow clock: the device does not warm up at 20 Hz, and
+  /// writing the same number six hundred times a minute would be noise.
+  device('device'),
+
   marker('marker'),
   sessionFooter('footer');
 
@@ -50,7 +58,12 @@ enum RecordType {
 ///   keys, so a version-1 reader still parses a version-2 line; the bump is
 ///   what lets a *reader* tell "this drive had no markings" apart from "this
 ///   build never looked for any", which are very different claims.
-const int recordingSchemaVersion = 2;
+/// * **3** — adds `device` records (battery, thermal status and headroom),
+///   the governor's decision on every `perf` record, and the fused lateral
+///   state on the world record. Same reasoning: a slow session in a
+///   version-2 recording is ambiguous between a slow phone and a hot one,
+///   and a version-3 recording is not.
+const int recordingSchemaVersion = 3;
 
 /// One line of the JSONL stream.
 class SessionRecord {
@@ -313,6 +326,10 @@ List<SessionRecord> recordsForResult(
           (String k, double v) =>
               MapEntry<String, double>(k, double.parse(v.toStringAsFixed(2))),
         ),
+        // What the governor allowed, and why. Without it a slow recording
+        // cannot be told apart from a hot one, and those need different
+        // fixes.
+        if (result.performance != null) 'perf': result.performance!.toJson(),
       },
     ),
   ];
