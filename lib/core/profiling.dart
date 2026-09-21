@@ -80,6 +80,7 @@ class PipelineStageNames {
   static const String roadEdge = 'Road Edges';
   static const String depth = 'Depth';
   static const String depthFusion = 'Depth Fusion';
+  static const String roadMarkings = 'Road Markings';
   static const String trafficSign = 'Traffic Signs';
   static const String trafficLight = 'Traffic Lights';
   static const String egoMotion = 'Ego Motion';
@@ -99,6 +100,7 @@ class PipelineStageNames {
     roadEdge,
     depth,
     depthFusion,
+    roadMarkings,
     trafficSign,
     trafficLight,
     egoMotion,

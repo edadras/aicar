@@ -238,6 +238,11 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
                   autonomy: result.world.autonomy,
                   dense: true,
                 ),
+                const SizedBox(height: 8),
+                TurnSignalIndicators(
+                  state: result.command.turnSignal,
+                  timestampMicros: result.world.timestampMicros,
+                ),
               ],
             ),
             const Spacer(),
@@ -334,6 +339,15 @@ class _LiveDriveScreenState extends State<LiveDriveScreen>
                   value: _options.roadEdges,
                   onChanged: (bool v) =>
                       toggle(_options.copyWith(roadEdges: v)),
+                ),
+                SwitchListTile(
+                  title: const Text('Road markings'),
+                  subtitle: const Text(
+                      'Crossings, stop lines, speed bumps and the junction '
+                      'they imply'),
+                  value: _options.roadMarkings,
+                  onChanged: (bool v) =>
+                      toggle(_options.copyWith(roadMarkings: v)),
                 ),
                 SwitchListTile(
                   title: const Text('Predicted object paths'),

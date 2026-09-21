@@ -7,6 +7,8 @@ import '../navigation/maneuver.dart';
 import '../perception/traffic_light.dart';
 import '../planning/collision_predictor.dart';
 import '../planning/planned_path.dart';
+import '../road/intersection_detector.dart';
+import '../road/road_marking.dart';
 import '../tracking/object_track.dart';
 import '../world_model/hazard.dart';
 import '../world_model/world_state.dart';
@@ -22,6 +24,7 @@ class DecisionConfig {
     this.stopDistanceMeters = 12.0,
     this.turnAnnounceMeters = 35.0,
     this.overSpeedToleranceKph = 5.0,
+    this.crosswalkYieldMeters = 25.0,
     this.minDwellSeconds = 0.4,
     this.emergencyDwellSeconds = 1.2,
     this.uncertainDwellSeconds = 0.6,
@@ -38,6 +41,10 @@ class DecisionConfig {
   final double stopDistanceMeters;
   final double turnAnnounceMeters;
   final double overSpeedToleranceKph;
+
+  /// Within this distance of a crossing, someone waiting at its edge is
+  /// treated as about to step onto it rather than as scenery.
+  final double crosswalkYieldMeters;
 
   /// Minimum time a state is held before a *lower* priority state can take
   /// over. Without it the display flickers between states every frame as
@@ -92,6 +99,8 @@ class RuleBasedDecisionEngine implements DecisionEngine {
       ..._uncertaintyCandidates(world, path),
       ..._collisionCandidates(world, path, collisions),
       ..._trafficControlCandidates(world),
+      ..._roadMarkingCandidates(world),
+      ..._intersectionCandidates(world),
       ..._pathCandidates(world, path),
       ..._navigationCandidates(world),
       ..._speedCandidates(world, path),
@@ -353,6 +362,162 @@ class RuleBasedDecisionEngine implements DecisionEngine {
     return out;
   }
 
+  /// Paint on the road: crossings and speed bumps.
+  ///
+  /// These are not hazards in the collision sense — nothing is going to hit
+  /// us — but they are exactly the kind of thing a driver reads the road for,
+  /// and a stack that ignored them would be obviously wrong to anyone
+  /// watching it drive.
+  List<_Candidate> _roadMarkingCandidates(WorldState world) {
+    final List<_Candidate> out = <_Candidate>[];
+
+    // --- Crossings ---------------------------------------------------------
+    final RoadMarking? crossing =
+        world.markingAhead(RoadMarkingType.crosswalk);
+    if (crossing != null &&
+        crossing.distanceMeters <= RoadMarkingType.crosswalk.approachMeters) {
+      final List<ObjectTrack> waiting = world.pedestriansAtCrossing;
+
+      if (waiting.isNotEmpty &&
+          crossing.distanceMeters <= config.crosswalkYieldMeters) {
+        // Someone is on or at the crossing. That is a yield, not an advisory.
+        final ObjectTrack nearest = waiting.reduce((ObjectTrack a,
+                ObjectTrack b) =>
+            a.position.y < b.position.y ? a : b);
+        out.add(_Candidate(
+          state: DrivingState.pedestrianYield,
+          reason: '${waiting.length} '
+              '${waiting.length == 1 ? 'person' : 'people'} at the crossing '
+              '${crossing.distanceMeters.toStringAsFixed(0)} m ahead',
+          confidence: clampDouble(
+            crossing.confidence.value * nearest.confidence.value,
+            0.2,
+            0.92,
+          ),
+          targetSpeedMps: 0,
+          trackId: nearest.id,
+          hazard: Hazard(
+            type: HazardType.crosswalkAhead,
+            severity: HazardSeverity.warning,
+            description: 'Pedestrian crossing with people at it',
+            confidence: crossing.confidence.value,
+            distanceMeters: crossing.distanceMeters,
+            relatedTrackId: nearest.id,
+          ),
+        ));
+      } else {
+        final double target = _approachSpeed(
+          world.ego.speedMps,
+          crossing.distanceMeters,
+          RoadMarkingType.crosswalk.advisorySpeedMps,
+        );
+        if (world.ego.speedMps > target + 1.0) {
+          out.add(_Candidate(
+            state: DrivingState.slowDown,
+            reason: 'Pedestrian crossing in '
+                '${crossing.distanceMeters.toStringAsFixed(0)} m',
+            confidence: clampDouble(crossing.confidence.value, 0.2, 0.85),
+            targetSpeedMps: target,
+            hazard: Hazard(
+              type: HazardType.crosswalkAhead,
+              severity: HazardSeverity.caution,
+              description: 'Pedestrian crossing ahead',
+              confidence: crossing.confidence.value,
+              distanceMeters: crossing.distanceMeters,
+            ),
+          ));
+        }
+      }
+    }
+
+    // --- Speed bumps -------------------------------------------------------
+    final RoadMarking? bump = world.markingAhead(RoadMarkingType.speedBump);
+    if (bump != null &&
+        bump.distanceMeters <= RoadMarkingType.speedBump.approachMeters) {
+      final double target = _approachSpeed(
+        world.ego.speedMps,
+        bump.distanceMeters,
+        RoadMarkingType.speedBump.advisorySpeedMps,
+      );
+      if (world.ego.speedMps > target + 0.8) {
+        out.add(_Candidate(
+          state: DrivingState.slowDown,
+          reason: 'Speed bump in ${bump.distanceMeters.toStringAsFixed(0)} m, '
+              'easing to '
+              '${(RoadMarkingType.speedBump.advisorySpeedKph).round()} km/h',
+          confidence: clampDouble(bump.confidence.value, 0.2, 0.85),
+          targetSpeedMps: target,
+          hazard: Hazard(
+            type: HazardType.speedBumpAhead,
+            severity: HazardSeverity.caution,
+            description: 'Speed bump ahead',
+            confidence: bump.confidence.value,
+            distanceMeters: bump.distanceMeters,
+          ),
+        ));
+      }
+    }
+
+    return out;
+  }
+
+  /// Approaching a junction.
+  ///
+  /// The important case is the *uncontrolled* one. A green light tells us the
+  /// junction is ours; no signal at all tells us nothing, and the correct
+  /// response to knowing nothing about who has priority is to arrive slowly
+  /// enough to react.
+  List<_Candidate> _intersectionCandidates(WorldState world) {
+    final IntersectionEstimate? junction = world.intersection;
+    if (junction == null) return const <_Candidate>[];
+
+    final double postedLimit = world.effectiveSpeedLimitKph != null
+        ? world.effectiveSpeedLimitKph! / 3.6
+        : math.max(world.ego.speedMps, 8.0);
+    final double onset = junction.cautionOnsetMeters(
+      speedMps: world.ego.speedMps,
+      postedLimitMps: postedLimit,
+    );
+    if (junction.distanceMeters > onset) return const <_Candidate>[];
+
+    final double approach =
+        junction.approachSpeedMps(postedLimitMps: postedLimit);
+    final double target = _approachSpeed(
+        world.ego.speedMps, junction.distanceMeters, approach);
+
+    // A signalled junction on green with nothing crossing needs no candidate
+    // of its own — the red-light branch handles the case that matters.
+    if (world.ego.speedMps <= target + 0.8 && !junction.hasCrossingTraffic) {
+      return const <_Candidate>[];
+    }
+
+    final HazardSeverity severity = junction.hasCrossingTraffic
+        ? HazardSeverity.warning
+        : HazardSeverity.caution;
+
+    return <_Candidate>[
+      _Candidate(
+        state: DrivingState.slowDown,
+        reason: '${junction.control.label} junction in '
+            '${junction.distanceMeters.toStringAsFixed(0)} m'
+            '${junction.hasCrossingTraffic ? ', traffic crossing' : ''} '
+            '— ${junction.evidence.first}',
+        confidence: clampDouble(junction.confidence.value, 0.2, 0.9),
+        targetSpeedMps: target,
+        hazard: Hazard(
+          type: junction.hasCrossingTraffic
+              ? HazardType.crossingTraffic
+              : HazardType.intersectionAhead,
+          severity: severity,
+          description: '${junction.control.label} junction: '
+              '${junction.evidence.join('; ')}',
+          confidence: junction.confidence.value,
+          distanceMeters: junction.distanceMeters,
+        ),
+      ),
+    ];
+  }
+
   List<_Candidate> _pathCandidates(WorldState world, PlannedPath path) {
     final List<_Candidate> out = <_Candidate>[];
 
@@ -476,8 +641,16 @@ class RuleBasedDecisionEngine implements DecisionEngine {
   List<_Candidate> _speedCandidates(WorldState world, PlannedPath path) {
     final List<_Candidate> out = <_Candidate>[];
 
+    // A limit only constrains us once we believe we read it. A sign we are
+    // 20 % sure said "50" is not a reason to brake — it is a reason to say we
+    // do not know the limit. A limit that came from the map carries its own
+    // provenance and does not need the sign reader's confidence.
     final int? limit = world.effectiveSpeedLimitKph;
+    final bool limitTrusted = world.regulatory.hasSpeedLimit ||
+        (world.regulatory.speedLimitKph == null &&
+            world.routeProgress?.mapSpeedLimitKph != null);
     if (limit != null &&
+        limitTrusted &&
         world.ego.speedKph > limit + config.overSpeedToleranceKph &&
         world.ego.speedConfidence > 0.5) {
       out.add(_Candidate(
@@ -610,6 +783,23 @@ class RuleBasedDecisionEngine implements DecisionEngine {
         : math.max(world.ego.speedMps, 8.0);
 
     return clampDouble(target, 0, ceiling);
+  }
+
+  /// Speed we may be doing now and still be down to [targetSpeed] on arrival.
+  ///
+  /// Ramping in like this is what stops the stack from ignoring a bump at
+  /// 40 m and then demanding 20 km/h at 5 m.
+  double _approachSpeed(
+    double currentSpeed,
+    double distance,
+    double targetSpeed,
+  ) {
+    if (distance <= 0) return targetSpeed;
+    const double comfortDecel = 1.6;
+    final double allowed = math.sqrt(
+      targetSpeed * targetSpeed + 2 * comfortDecel * distance,
+    );
+    return math.min(math.max(targetSpeed, currentSpeed), allowed);
   }
 
   /// Speed from which the vehicle could comfortably stop within [distance].

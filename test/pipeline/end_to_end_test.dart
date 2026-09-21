@@ -41,6 +41,7 @@ PerceptionPipeline buildModelFreePipeline() {
         depthEveryNFrames: 1,
         laneEveryNFrames: 1,
         signsEveryNFrames: 1,
+        markingsEveryNFrames: 1,
       ),
     ),
   );

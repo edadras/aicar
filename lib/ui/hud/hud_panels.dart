@@ -6,7 +6,10 @@ import '../../decision/driving_decision.dart';
 import '../../perception/traffic_light.dart';
 import '../../perception/traffic_sign.dart';
 import '../../pipeline/pipeline_result.dart';
+import '../../road/intersection_detector.dart';
+import '../../road/road_marking.dart';
 import '../../simulation/simulated_control.dart';
+import '../../simulation/turn_signal.dart';
 import '../../world_model/hazard.dart';
 import '../../world_model/world_state.dart';
 import '../theme.dart';
@@ -272,6 +275,43 @@ class RoadContextPanel extends StatelessWidget {
         subtitle: light.distanceMeters == null
             ? light.arrow.label
             : '${light.distanceMeters!.toStringAsFixed(0)} m',
+      ));
+    }
+
+    // What is painted on the road ahead, nearest first. These are the cues a
+    // driver reads the road surface for, and the panel is where the stack
+    // says it read them too.
+    for (final RoadMarking m in world.roadMarkings) {
+      if (m.farEdgeMeters < 0) continue;
+      if (m.distanceMeters > m.type.approachMeters) continue;
+      children.add(_ContextCard(
+        color: switch (m.type) {
+          RoadMarkingType.crosswalk => HudTheme.info,
+          RoadMarkingType.speedBump => HudTheme.caution,
+          RoadMarkingType.stopLine => HudTheme.textDim,
+        },
+        title: m.type.label,
+        subtitle: '${m.distanceMeters.toStringAsFixed(0)} m'
+            '${m.type.compelsSlowing ? ' · '
+                '${m.type.advisorySpeedKph.round()} km/h' : ''}'
+            ' · ${m.confidence.percent}%'
+            '${m.confirmedByMotion ? ' · felt' : ''}',
+      ));
+    }
+
+    final IntersectionEstimate? junction = world.intersection;
+    if (junction != null) {
+      children.add(_ContextCard(
+        color: junction.hasCrossingTraffic
+            ? HudTheme.warning
+            : (junction.control.requiresYield
+                ? HudTheme.caution
+                : HudTheme.accent),
+        title: '${junction.control.label} JUNCTION',
+        subtitle: '${junction.distanceMeters.toStringAsFixed(0)} m · '
+            '${junction.confidence.percent}%'
+            '${junction.hasCrossingTraffic ? '\n'
+                '${junction.crossingTrafficTrackIds.length} crossing' : ''}',
       ));
     }
 
@@ -542,4 +582,99 @@ class AutonomyConfidencePanel extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The simulated indicators: two arrows that blink the way a relay would.
+///
+/// The phase comes from the frame timestamp rather than from a UI animation
+/// controller, so the HUD, the recording and a replay of that recording all
+/// show the same lamp at the same moment. Without that, a replay would look
+/// subtly different from the drive it is replaying.
+class TurnSignalIndicators extends StatelessWidget {
+  const TurnSignalIndicators({
+    super.key,
+    required this.state,
+    required this.timestampMicros,
+    this.showReason = true,
+  });
+
+  final TurnSignalState state;
+  final int timestampMicros;
+  final bool showReason;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!state.signal.isActive) return const SizedBox.shrink();
+
+    final bool on = state.blinkOn(timestampMicros);
+    final Color colour = state.signal == TurnSignal.hazard
+        ? HudTheme.critical
+        : HudTheme.caution;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: HudTheme.background.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colour.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _Arrow(
+            icon: Icons.keyboard_double_arrow_left,
+            lit: on && state.signal.showsLeft,
+            colour: colour,
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                state.signal.label,
+                style: HudTheme.hudValue.copyWith(fontSize: 13, color: colour),
+              ),
+              if (showReason && state.reason.isNotEmpty)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 190),
+                  child: Text(
+                    state.reason,
+                    style: HudTheme.caption.copyWith(fontSize: 10),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 8),
+          _Arrow(
+            icon: Icons.keyboard_double_arrow_right,
+            lit: on && state.signal.showsRight,
+            colour: colour,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Arrow extends StatelessWidget {
+  const _Arrow({
+    required this.icon,
+    required this.lit,
+    required this.colour,
+  });
+
+  final IconData icon;
+  final bool lit;
+  final Color colour;
+
+  @override
+  Widget build(BuildContext context) => Icon(
+        icon,
+        size: 26,
+        color: lit ? colour : HudTheme.outline.withValues(alpha: 0.5),
+      );
 }

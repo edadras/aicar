@@ -8,7 +8,9 @@ import '../navigation/route.dart';
 import '../perception/detection.dart';
 import '../perception/traffic_light.dart';
 import '../perception/traffic_sign.dart';
+import '../road/intersection_detector.dart';
 import '../road/lane.dart';
+import '../road/road_marking.dart';
 import '../road/no_lane_corridor.dart';
 import '../road/road_segmentation.dart';
 import '../sensors/ego_motion.dart';
@@ -47,6 +49,8 @@ class WorldModelBuilder {
     required List<TrafficSign> signs,
     required List<TrafficLight> lights,
     required RegulatoryContext regulatory,
+    List<RoadMarking> roadMarkings = const <RoadMarking>[],
+    IntersectionEstimate? intersection,
     CorridorEstimate? corridor,
     RouteProgress? routeProgress,
     DepthMap? depth,
@@ -73,6 +77,8 @@ class WorldModelBuilder {
       lanes: lanes,
       lights: lights,
       regulatory: regulatory,
+      roadMarkings: roadMarkings,
+      intersection: intersection,
       ego: ego,
       drivableArea: drivableArea,
       autonomy: autonomy,
@@ -93,6 +99,8 @@ class WorldModelBuilder {
       trafficSigns: signs,
       trafficLights: lights,
       regulatory: regulatory,
+      roadMarkings: roadMarkings,
+      intersection: intersection,
       routeProgress: routeProgress,
       depth: depth,
       segmentation: segmentation,
@@ -183,6 +191,8 @@ class WorldModelBuilder {
     required LaneDetectionResult lanes,
     required List<TrafficLight> lights,
     required RegulatoryContext regulatory,
+    required List<RoadMarking> roadMarkings,
+    required IntersectionEstimate? intersection,
     required EgoMotionState ego,
     required DrivableArea drivableArea,
     required AutonomyConfidence autonomy,
@@ -258,6 +268,68 @@ class WorldModelBuilder {
         severity: HazardSeverity.warning,
         description: 'Stop sign ahead',
         confidence: 0.8,
+      ));
+    }
+
+    // Paint on the road. These are announcements, not emergencies, so they
+    // stay at caution unless someone is standing on the crossing.
+    for (final RoadMarking m in roadMarkings) {
+      if (m.farEdgeMeters < 0) continue;
+      if (m.distanceMeters > m.type.approachMeters) continue;
+
+      switch (m.type) {
+        case RoadMarkingType.crosswalk:
+          final bool occupied = tracks.any((ObjectTrack t) =>
+              t.objectClass.isVulnerable &&
+              t.position.y > m.distanceMeters - 4 &&
+              t.position.y < m.farEdgeMeters + 4 &&
+              t.position.x.abs() < m.widthMeters / 2 + 2.5);
+          hazards.add(Hazard(
+            type: HazardType.crosswalkAhead,
+            severity:
+                occupied ? HazardSeverity.warning : HazardSeverity.caution,
+            description: occupied
+                ? 'Someone is at the crossing '
+                    '${m.distanceMeters.toStringAsFixed(0)} m ahead'
+                : 'Pedestrian crossing '
+                    '${m.distanceMeters.toStringAsFixed(0)} m ahead',
+            confidence: m.confidence.value,
+            distanceMeters: m.distanceMeters,
+          ));
+        case RoadMarkingType.speedBump:
+          hazards.add(Hazard(
+            type: HazardType.speedBumpAhead,
+            severity: HazardSeverity.caution,
+            description: 'Speed bump '
+                '${m.distanceMeters.toStringAsFixed(0)} m ahead'
+                '${m.confirmedByMotion ? ' (confirmed)' : ''}',
+            confidence: m.confidence.value,
+            distanceMeters: m.distanceMeters,
+          ));
+        case RoadMarkingType.stopLine:
+          // On its own a stop line is evidence of a junction, which the
+          // junction hazard below already reports. Announcing both would
+          // say the same thing twice.
+          break;
+      }
+    }
+
+    if (intersection != null) {
+      final bool crossing = intersection.hasCrossingTraffic;
+      hazards.add(Hazard(
+        type: crossing
+            ? HazardType.crossingTraffic
+            : HazardType.intersectionAhead,
+        severity: crossing
+            ? HazardSeverity.warning
+            : (intersection.control.requiresYield
+                ? HazardSeverity.caution
+                : HazardSeverity.info),
+        description: '${intersection.control.label} junction '
+            '${intersection.distanceMeters.toStringAsFixed(0)} m ahead: '
+            '${intersection.evidence.join('; ')}',
+        confidence: intersection.confidence.value,
+        distanceMeters: intersection.distanceMeters,
       ));
     }
 

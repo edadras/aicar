@@ -20,6 +20,7 @@ class DrivableAreaBuilder {
     this.maxLateralMeters = 9.0,
     this.lateralStepMeters = 0.25,
     this.minCorridorWidthMeters = 2.2,
+    this.maxSurfaceGapMeters = 6.0,
   });
 
   final double minRangeMeters;
@@ -30,6 +31,17 @@ class DrivableAreaBuilder {
 
   /// Narrower than this and the "corridor" is noise, not a road.
   final double minCorridorWidthMeters;
+
+  /// How far the corridor may be interrupted and still be bridged.
+  ///
+  /// Paint is not the end of the road. A zebra crossing, a junction box, a
+  /// big painted arrow — any appearance-based segmenter sees a bright band
+  /// across the carriageway and stops there, and without this the planner
+  /// would then report "path blocked" and brake at every crossing in town.
+  /// Six metres covers the widest of them; a genuine end of the road has
+  /// nothing beyond it, so a gap only bridges once road is found on the far
+  /// side.
+  final double maxSurfaceGapMeters;
 
   DrivableArea build({
     required RoadSegmentation segmentation,
@@ -60,28 +72,63 @@ class DrivableAreaBuilder {
     // the connected region containing us, not any road-coloured blob.
     double searchCentre = egoLateralOffset ?? 0.0;
 
+    // Ranges the scan could not resolve, held back until we know whether the
+    // road resumes beyond them.
+    final List<double> pendingGap = <double>[];
+
     for (double range = minRangeMeters;
         range <= usefulRange;
         range += rangeStepMeters) {
       final _Extent? extent =
           _scanRow(segmentation, calibration, range, searchCentre);
-      if (extent == null) break; // road ends here; do not invent more
 
-      double left = extent.left;
-      double right = extent.right;
+      double left = 0;
+      double right = 0;
+      bool usable = extent != null;
+      if (extent != null) {
+        left = extent.left;
+        right = extent.right;
 
-      // Obstacles occupy road: a lorry stopped on the carriageway is road
-      // surface but is not drivable, which is exactly the distinction the
-      // SurfaceClass.road / drivableRoad split exists for.
-      (left, right) = _applyObstacles(left, right, range, obstacles);
+        // Obstacles occupy road: a lorry stopped on the carriageway is road
+        // surface but is not drivable, which is exactly the distinction the
+        // SurfaceClass.road / drivableRoad split exists for.
+        (left, right) = _applyObstacles(left, right, range, obstacles);
+        usable = right - left >= minCorridorWidthMeters;
+      }
 
-      if (right - left < minCorridorWidthMeters) break;
+      if (!usable) {
+        // Hold the range open rather than ending the road here. If nothing
+        // resolves within maxSurfaceGapMeters the loop stops below, and the
+        // corridor ends at the last row we actually saw.
+        if (samples.isEmpty) break;
+        pendingGap.add(range);
+        if (pendingGap.length * rangeStepMeters > maxSurfaceGapMeters) break;
+        continue;
+      }
+
+      // The road resumed, so whatever interrupted it was on the surface.
+      // Fill the gap by interpolating between the two sides, at a confidence
+      // that says plainly this was inferred rather than observed.
+      if (pendingGap.isNotEmpty) {
+        final DrivableSample before = samples.last;
+        for (int i = 0; i < pendingGap.length; i++) {
+          final double t = (i + 1) / (pendingGap.length + 1);
+          samples.add(DrivableSample(
+            distanceAhead: pendingGap[i],
+            leftEdge: lerpDouble(before.leftEdge, left, t),
+            rightEdge: lerpDouble(before.rightEdge, right, t),
+            confidence:
+                math.min(before.confidence, extent!.confidence) * 0.6,
+          ));
+        }
+        pendingGap.clear();
+      }
 
       samples.add(DrivableSample(
         distanceAhead: range,
         leftEdge: left,
         rightEdge: right,
-        confidence: extent.confidence,
+        confidence: extent!.confidence,
       ));
       searchCentre = (left + right) / 2;
     }

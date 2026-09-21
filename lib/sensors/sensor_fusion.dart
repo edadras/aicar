@@ -421,6 +421,7 @@ class EgoMotionEstimator {
       longitudinalAccelMps2:
           aligned?.longitudinalAcceleration ?? _longitudinalAccel,
       lateralAccelMps2: aligned?.lateralAcceleration ?? _lateralAccel,
+      verticalAccelMps2: aligned?.verticalAcceleration ?? 0,
       position: _currentFix,
       timestampMicros: timestampMicros,
       speedConfidence: speedConfidence,

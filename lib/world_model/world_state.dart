@@ -9,8 +9,10 @@ import '../navigation/route.dart';
 import '../perception/object_class.dart';
 import '../perception/traffic_light.dart';
 import '../perception/traffic_sign.dart';
+import '../road/intersection_detector.dart';
 import '../road/lane.dart';
 import '../road/no_lane_corridor.dart';
+import '../road/road_marking.dart';
 import '../road/road_segmentation.dart';
 import '../sensors/ego_motion.dart';
 import '../tracking/object_track.dart';
@@ -38,6 +40,8 @@ class WorldState {
     required this.regulatory,
     required this.hazards,
     required this.autonomy,
+    this.roadMarkings = const <RoadMarking>[],
+    this.intersection,
     this.corridor,
     this.routeProgress,
     this.depth,
@@ -95,6 +99,13 @@ class WorldState {
   final List<TrafficSign> trafficSigns;
   final List<TrafficLight> trafficLights;
   final RegulatoryContext regulatory;
+
+  /// Confirmed markings painted on the road ahead — stop lines, crossings,
+  /// speed bumps — nearest first.
+  final List<RoadMarking> roadMarkings;
+
+  /// The junction inferred ahead, if the cues add up to one.
+  final IntersectionEstimate? intersection;
 
   // --- Route --------------------------------------------------------------
 
@@ -189,6 +200,34 @@ class WorldState {
   ManeuverIntent get navigationIntent =>
       routeProgress?.intent ?? ManeuverIntent.unknown;
 
+  /// The nearest confirmed marking of a type that still lies ahead of us.
+  RoadMarking? markingAhead(RoadMarkingType type) {
+    RoadMarking? best;
+    for (final RoadMarking m in roadMarkings) {
+      if (m.type != type) continue;
+      if (m.farEdgeMeters < 0) continue;
+      if (best == null || m.distanceMeters < best.distanceMeters) best = m;
+    }
+    return best;
+  }
+
+  /// Pedestrians standing on or stepping towards the crossing ahead.
+  ///
+  /// A person beside a crossing is the whole reason a crossing changes how
+  /// you drive; a person on a pavement 30 m from one is not.
+  List<ObjectTrack> get pedestriansAtCrossing {
+    final RoadMarking? crossing = markingAhead(RoadMarkingType.crosswalk);
+    if (crossing == null) return const <ObjectTrack>[];
+    return <ObjectTrack>[
+      for (final ObjectTrack t in tracks)
+        if (t.objectClass.isVulnerable &&
+            t.position.y > crossing.distanceMeters - 4 &&
+            t.position.y < crossing.farEdgeMeters + 4 &&
+            t.position.x.abs() < crossing.widthMeters / 2 + 2.5)
+          t,
+    ];
+  }
+
   bool get isNight => ambientLuminance < 55;
 
   /// The lane/corridor model in use, as a single centreline. Prefers detected
@@ -216,6 +255,8 @@ class WorldState {
     AutonomyConfidence? autonomy,
     RouteProgress? routeProgress,
     CorridorEstimate? corridor,
+    List<RoadMarking>? roadMarkings,
+    IntersectionEstimate? intersection,
     List<String>? degradedSubsystems,
   }) =>
       WorldState(
@@ -230,6 +271,8 @@ class WorldState {
         trafficSigns: trafficSigns,
         trafficLights: trafficLights,
         regulatory: regulatory,
+        roadMarkings: roadMarkings ?? this.roadMarkings,
+        intersection: intersection ?? this.intersection,
         hazards: hazards ?? this.hazards,
         autonomy: autonomy ?? this.autonomy,
         corridor: corridor ?? this.corridor,
@@ -260,6 +303,11 @@ class WorldState {
           for (final TrafficLight l in trafficLights) l.toJson(),
         ],
         'regulatory': regulatory.toJson(),
+        if (roadMarkings.isNotEmpty)
+          'markings': <Map<String, dynamic>>[
+            for (final RoadMarking m in roadMarkings) m.toJson(),
+          ],
+        if (intersection != null) 'intersection': intersection!.toJson(),
         'hazards': <Map<String, dynamic>>[
           for (final Hazard h in hazards) h.toJson(),
         ],
@@ -337,6 +385,19 @@ class WorldState {
       ],
       regulatory: _regulatoryFromJson(
           j['regulatory'] as Map<String, dynamic>?),
+      roadMarkings: <RoadMarking>[
+        for (final dynamic m
+            in (j['markings'] as List<dynamic>? ?? const <dynamic>[]))
+          RoadMarking.fromJson(
+            m as Map<String, dynamic>,
+            frameId: frameId,
+            timestampMicros: ts,
+          ),
+      ],
+      intersection: j['intersection'] == null
+          ? null
+          : IntersectionEstimate.fromJson(
+              j['intersection'] as Map<String, dynamic>),
       hazards: <Hazard>[
         for (final dynamic h
             in (j['hazards'] as List<dynamic>? ?? const <dynamic>[]))

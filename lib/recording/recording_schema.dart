@@ -43,7 +43,14 @@ enum RecordType {
 /// Schema version, bumped whenever the record format changes in a way a
 /// previous reader could not handle. Written into every session header so a
 /// newer build can still read (or explicitly refuse) an older recording.
-const int recordingSchemaVersion = 1;
+///
+/// * **1** — the original format.
+/// * **2** — adds road markings, the junction inference and the simulated
+///   indicator to the world and control records. All three are optional
+///   keys, so a version-1 reader still parses a version-2 line; the bump is
+///   what lets a *reader* tell "this drive had no markings" apart from "this
+///   build never looked for any", which are very different claims.
+const int recordingSchemaVersion = 2;
 
 /// One line of the JSONL stream.
 class SessionRecord {

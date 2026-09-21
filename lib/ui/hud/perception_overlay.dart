@@ -8,7 +8,9 @@ import '../../core/geometry.dart' as geom;
 import '../../perception/traffic_light.dart';
 import '../../perception/traffic_sign.dart';
 import '../../planning/planned_path.dart';
+import '../../road/intersection_detector.dart';
 import '../../road/lane.dart';
+import '../../road/road_marking.dart';
 import '../../road/road_segmentation.dart';
 import '../../tracking/object_track.dart';
 import '../../world_model/world_state.dart';
@@ -28,6 +30,7 @@ class OverlayOptions {
     this.predictedPaths = false,
     this.distanceLabels = true,
     this.horizonLine = false,
+    this.roadMarkings = true,
   });
 
   final bool boundingBoxes;
@@ -41,6 +44,9 @@ class OverlayOptions {
   final bool distanceLabels;
   final bool horizonLine;
 
+  /// Stop lines, crossings, speed bumps and the inferred junction line.
+  final bool roadMarkings;
+
   OverlayOptions copyWith({
     bool? boundingBoxes,
     bool? laneLines,
@@ -52,6 +58,7 @@ class OverlayOptions {
     bool? predictedPaths,
     bool? distanceLabels,
     bool? horizonLine,
+    bool? roadMarkings,
   }) =>
       OverlayOptions(
         boundingBoxes: boundingBoxes ?? this.boundingBoxes,
@@ -64,6 +71,7 @@ class OverlayOptions {
         predictedPaths: predictedPaths ?? this.predictedPaths,
         distanceLabels: distanceLabels ?? this.distanceLabels,
         horizonLine: horizonLine ?? this.horizonLine,
+        roadMarkings: roadMarkings ?? this.roadMarkings,
       );
 }
 
@@ -101,6 +109,7 @@ class PerceptionOverlayPainter extends CustomPainter {
     if (options.laneLines) _paintLanes(canvas, size);
     if (options.roadEdges) _paintRoadEdges(canvas, size);
     if (options.horizonLine) _paintHorizon(canvas, size);
+    if (options.roadMarkings) _paintRoadMarkings(canvas, size);
     if (options.predictedPaths) _paintPredictedPaths(canvas, size);
     if (options.boundingBoxes) _paintTracks(canvas, size);
     if (options.trafficSigns) _paintSigns(canvas, size);
@@ -343,6 +352,111 @@ class PerceptionOverlayPainter extends CustomPainter {
   }
 
   // --- objects ------------------------------------------------------------
+
+  /// Road-surface markings and the junction they imply.
+  ///
+  /// Drawn as the metric quadrilateral the marking actually occupies, so a
+  /// crossing that lines up with the painted one on screen is direct visual
+  /// proof that the bird's-eye geometry and the calibration agree. When they
+  /// disagree, the band sits visibly off the paint — which is the point.
+  void _paintRoadMarkings(Canvas canvas, Size size) {
+    for (final RoadMarking m in world.roadMarkings) {
+      if (m.farEdgeMeters < 0) continue;
+
+      final double half = m.widthMeters / 2;
+      final List<Offset?> corners = <Offset?>[
+        _project(geom.Vec2(m.lateralCenterMeters - half, m.distanceMeters),
+            size),
+        _project(geom.Vec2(m.lateralCenterMeters + half, m.distanceMeters),
+            size),
+        _project(
+            geom.Vec2(m.lateralCenterMeters + half, m.farEdgeMeters), size),
+        _project(
+            geom.Vec2(m.lateralCenterMeters - half, m.farEdgeMeters), size),
+      ];
+      if (corners.any((Offset? o) => o == null)) continue;
+
+      final Color colour = switch (m.type) {
+        RoadMarkingType.crosswalk => HudTheme.info,
+        RoadMarkingType.speedBump => HudTheme.caution,
+        RoadMarkingType.stopLine => HudTheme.textDim,
+      };
+
+      final Path quad = Path()..moveTo(corners[0]!.dx, corners[0]!.dy);
+      for (int i = 1; i < corners.length; i++) {
+        quad.lineTo(corners[i]!.dx, corners[i]!.dy);
+      }
+      quad.close();
+
+      canvas.drawPath(
+        quad,
+        Paint()
+          ..style = PaintingStyle.fill
+          ..color = colour.withValues(alpha: 0.18 * m.confidence.value + 0.06),
+      );
+      canvas.drawPath(
+        quad,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = colour.withValues(alpha: 0.85),
+      );
+
+      if (options.distanceLabels) {
+        _drawLabel(
+          canvas,
+          Offset(corners[0]!.dx, corners[0]!.dy - 6),
+          '${m.type.label}  '
+          '${m.distanceMeters.toStringAsFixed(0)} m  '
+          '${m.confidence.percent}%',
+          colour,
+        );
+      }
+    }
+
+    // The junction line: where the stack believes the mouth of the junction
+    // is, drawn right across the view because a junction is not a lane-width
+    // feature.
+    final IntersectionEstimate? junction = world.intersection;
+    if (junction == null) return;
+    final Offset? left =
+        _project(geom.Vec2(-6, junction.distanceMeters), size);
+    final Offset? right =
+        _project(geom.Vec2(6, junction.distanceMeters), size);
+    if (left == null || right == null) return;
+
+    final Color colour = junction.hasCrossingTraffic
+        ? HudTheme.warning
+        : (junction.control.requiresYield
+            ? HudTheme.caution
+            : HudTheme.accent);
+    final Paint paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = colour.withValues(alpha: 0.75);
+
+    // Dashed, so it never reads as a lane boundary or a stop line.
+    const double dash = 14;
+    final double span = (right - left).distance;
+    for (double d = 0; d < span; d += dash * 2) {
+      final double t0 = d / span;
+      final double t1 = math.min(1, (d + dash) / span);
+      canvas.drawLine(
+        Offset.lerp(left, right, t0)!,
+        Offset.lerp(left, right, t1)!,
+        paint,
+      );
+    }
+
+    _drawLabel(
+      canvas,
+      Offset(left.dx + 8, left.dy - 20),
+      '${junction.control.label} JUNCTION  '
+      '${junction.distanceMeters.toStringAsFixed(0)} m  '
+      '${junction.confidence.percent}%',
+      colour,
+    );
+  }
 
   void _paintTracks(Canvas canvas, Size size) {
     for (final ObjectTrack track in world.tracks) {

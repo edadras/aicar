@@ -15,6 +15,7 @@ class PipelineStageToggles {
     this.segmentation = true,
     this.laneDetection = true,
     this.roadEdges = true,
+    this.roadMarkings = true,
     this.depth = true,
     this.trafficSigns = true,
     this.trafficLights = true,
@@ -28,6 +29,12 @@ class PipelineStageToggles {
   final bool segmentation;
   final bool laneDetection;
   final bool roadEdges;
+
+  /// Stop lines, crossings and speed bumps, plus the junction inference they
+  /// feed. Cheap — it reuses the bird's-eye machinery the lane detector
+  /// already needs — but switchable like every other stage.
+  final bool roadMarkings;
+
   final bool depth;
   final bool trafficSigns;
   final bool trafficLights;
@@ -41,6 +48,7 @@ class PipelineStageToggles {
     bool? segmentation,
     bool? laneDetection,
     bool? roadEdges,
+    bool? roadMarkings,
     bool? depth,
     bool? trafficSigns,
     bool? trafficLights,
@@ -54,6 +62,7 @@ class PipelineStageToggles {
         segmentation: segmentation ?? this.segmentation,
         laneDetection: laneDetection ?? this.laneDetection,
         roadEdges: roadEdges ?? this.roadEdges,
+        roadMarkings: roadMarkings ?? this.roadMarkings,
         depth: depth ?? this.depth,
         trafficSigns: trafficSigns ?? this.trafficSigns,
         trafficLights: trafficLights ?? this.trafficLights,
@@ -68,6 +77,7 @@ class PipelineStageToggles {
         'segmentation': segmentation,
         'laneDetection': laneDetection,
         'roadEdges': roadEdges,
+        'roadMarkings': roadMarkings,
         'depth': depth,
         'trafficSigns': trafficSigns,
         'trafficLights': trafficLights,
@@ -89,12 +99,14 @@ class StageCadence {
     this.depthEveryNFrames = 3,
     this.laneEveryNFrames = 1,
     this.signsEveryNFrames = 2,
+    this.markingsEveryNFrames = 2,
   });
 
   final int segmentationEveryNFrames;
   final int depthEveryNFrames;
   final int laneEveryNFrames;
   final int signsEveryNFrames;
+  final int markingsEveryNFrames;
 
   bool shouldRun(int cadence, int frameIndex) =>
       cadence <= 1 || frameIndex % cadence == 0;

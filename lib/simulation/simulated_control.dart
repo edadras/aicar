@@ -1,5 +1,6 @@
 import '../core/geometry.dart';
 import '../core/safety.dart';
+import 'turn_signal.dart';
 
 /// The control command the stack *would* issue.
 ///
@@ -18,6 +19,7 @@ class SimulatedControlCommand {
     this.reason = '',
     this.isEmergency = false,
     this.steeringLimitDegrees = 35.0,
+    this.turnSignal = TurnSignalState.off,
   })  : steeringAngleDegrees =
             clampDouble(steeringAngleDegrees, -steeringLimitDegrees, steeringLimitDegrees),
         throttlePercent = clampDouble(throttlePercent, 0, 100),
@@ -72,6 +74,13 @@ class SimulatedControlCommand {
   final String reason;
   final bool isEmergency;
 
+  /// The indicator the stack would be operating, and why.
+  ///
+  /// It belongs with the other controls because it is one: indicating is part
+  /// of executing a manoeuvre, not a by-product of it. Like the rest of this
+  /// class it is a lamp on a screen and a field in a log.
+  final TurnSignalState turnSignal;
+
   /// Configurable steering range, shown in Settings.
   final double steeringLimitDegrees;
 
@@ -95,6 +104,7 @@ class SimulatedControlCommand {
     double? brakePercent,
     String? reason,
     bool? isEmergency,
+    TurnSignalState? turnSignal,
   }) =>
       SimulatedControlCommand(
         steeringAngleDegrees:
@@ -106,6 +116,7 @@ class SimulatedControlCommand {
         reason: reason ?? this.reason,
         isEmergency: isEmergency ?? this.isEmergency,
         steeringLimitDegrees: steeringLimitDegrees,
+        turnSignal: turnSignal ?? this.turnSignal,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -116,6 +127,7 @@ class SimulatedControlCommand {
         'frameId': frameId,
         if (reason.isNotEmpty) 'reason': reason,
         if (isEmergency) 'emergency': true,
+        if (turnSignal.signal.isActive) 'turnSignal': turnSignal.toJson(),
         // Written into every record so a dataset can be audited for
         // provenance without reading the code that produced it.
         'mode': SafetyMode.recordingTag,
@@ -130,9 +142,12 @@ class SimulatedControlCommand {
         frameId: (j['frameId'] as num).toInt(),
         reason: j['reason'] as String? ?? '',
         isEmergency: j['emergency'] as bool? ?? false,
+        turnSignal:
+            TurnSignalState.fromJson(j['turnSignal'] as Map<String, dynamic>?),
       );
 
   @override
   String toString() => 'SimulatedControl(steer $steeringDisplay, '
-      'throttle $throttleDisplay, brake $brakeDisplay)';
+      'throttle $throttleDisplay, brake $brakeDisplay'
+      '${turnSignal.signal.isActive ? ', ${turnSignal.signal.label}' : ''})';
 }

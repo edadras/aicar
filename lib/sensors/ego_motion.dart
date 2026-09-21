@@ -121,6 +121,10 @@ class ImuSample {
   double get longitudinalAcceleration => accelerationMps2.y;
   double get lateralAcceleration => accelerationMps2.x;
 
+  /// Positive = pushed upwards. Gravity has already been removed, so on
+  /// smooth tarmac this sits near zero and a speed bump is unmistakable.
+  double get verticalAcceleration => accelerationMps2.z;
+
   /// Positive = turning right, matching the steering sign convention.
   double get yawRate => -angularRateRadPerS.z;
 
@@ -212,6 +216,7 @@ class EgoMotionState {
     required this.longitudinalAccelMps2,
     required this.lateralAccelMps2,
     required this.position,
+    this.verticalAccelMps2 = 0,
     required this.timestampMicros,
     required this.speedConfidence,
     required this.headingConfidence,
@@ -243,6 +248,14 @@ class EgoMotionState {
 
   final double longitudinalAccelMps2;
   final double lateralAccelMps2;
+
+  /// Vertical acceleration in the vehicle frame, gravity removed.
+  ///
+  /// Nothing steers by this. It is here so the stack can check a prediction
+  /// against reality: when a speed bump the camera claimed to see is crossed,
+  /// the jolt either happened or it did not.
+  final double verticalAccelMps2;
+
   final GeoPosition? position;
   final int timestampMicros;
   final double speedConfidence;
@@ -268,6 +281,7 @@ class EgoMotionState {
     double? yawRateRadPerS,
     double? longitudinalAccelMps2,
     double? lateralAccelMps2,
+    double? verticalAccelMps2,
     GeoPosition? position,
     int? timestampMicros,
     double? speedConfidence,
@@ -282,6 +296,7 @@ class EgoMotionState {
         longitudinalAccelMps2:
             longitudinalAccelMps2 ?? this.longitudinalAccelMps2,
         lateralAccelMps2: lateralAccelMps2 ?? this.lateralAccelMps2,
+        verticalAccelMps2: verticalAccelMps2 ?? this.verticalAccelMps2,
         position: position ?? this.position,
         timestampMicros: timestampMicros ?? this.timestampMicros,
         speedConfidence: speedConfidence ?? this.speedConfidence,
@@ -296,6 +311,7 @@ class EgoMotionState {
         'yawRate': _r(yawRateRadPerS),
         'accLong': _r(longitudinalAccelMps2),
         'accLat': _r(lateralAccelMps2),
+        'accVert': _r(verticalAccelMps2),
         'pos': position?.toJson(),
         'ts': timestampMicros,
         'speedConf': _r(speedConfidence),
@@ -312,6 +328,7 @@ class EgoMotionState {
         yawRateRadPerS: (j['yawRate'] as num).toDouble(),
         longitudinalAccelMps2: (j['accLong'] as num).toDouble(),
         lateralAccelMps2: (j['accLat'] as num).toDouble(),
+        verticalAccelMps2: (j['accVert'] as num?)?.toDouble() ?? 0,
         position: j['pos'] == null
             ? null
             : GeoPosition.fromJson(j['pos'] as Map<String, dynamic>),

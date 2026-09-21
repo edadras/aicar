@@ -305,6 +305,16 @@ class PerformanceScreen extends StatelessWidget {
                         ),
                       ),
                     ),
+                    _ToggleRow(
+                      title: 'Road markings',
+                      value: session.config.toggles.roadMarkings,
+                      onChanged: (bool v) => session.applyConfig(
+                        session.config.copyWith(
+                          toggles: session.config.toggles
+                              .copyWith(roadMarkings: v),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),

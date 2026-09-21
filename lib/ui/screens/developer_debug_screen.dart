@@ -4,9 +4,10 @@ import 'package:flutter/services.dart';
 import '../../core/logging.dart';
 import '../../core/profiling.dart';
 import '../../depth/depth_map.dart';
-import '../../pipeline/pipeline_result.dart';
-import '../../road/road_segmentation.dart';
 import '../../pipeline/pipeline_factory.dart';
+import '../../pipeline/pipeline_result.dart';
+import '../../road/road_marking.dart';
+import '../../road/road_segmentation.dart';
 import '../driving_session.dart';
 import '../hud/hud_panels.dart';
 import '../theme.dart';
@@ -239,6 +240,69 @@ class _DeveloperDebugScreenState extends State<DeveloperDebugScreen> {
               ),
 
               if (result != null) ...<Widget>[
+                const SectionHeader('Road reading'),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        if (result.world.roadMarkings.isEmpty)
+                          const Text('No markings confirmed ahead',
+                              style: HudTheme.caption)
+                        else
+                          for (final RoadMarking m
+                              in result.world.roadMarkings)
+                            _kv(
+                              m.type.label,
+                              '${m.distanceMeters.toStringAsFixed(1)} m · '
+                              '${m.confidence.percent}% · '
+                              'seen x${m.observationCount}'
+                              '${m.confirmedByMotion ? ' · IMU confirmed' : ''}',
+                            ),
+                        const SizedBox(height: 6),
+                        if (result.world.intersection != null) ...<Widget>[
+                          _kv('Junction',
+                              '${result.world.intersection!.control.label} at '
+                              '${result.world.intersection!.distanceMeters.toStringAsFixed(0)} m '
+                              '(${result.world.intersection!.confidence.percent}%)'),
+                          for (final String e
+                              in result.world.intersection!.evidence)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 12, top: 2),
+                              child: Text('· $e', style: HudTheme.caption),
+                            ),
+                        ] else
+                          const Text('No junction inferred',
+                              style: HudTheme.caption),
+                        const SizedBox(height: 6),
+                        _kv('Indicator',
+                            result.command.turnSignal.signal.label),
+                        Builder(builder: (BuildContext context) {
+                          final (int predicted, int confirmed) score = widget
+                                  .session.latestPipeline
+                                  ?.roadMarkingTracker
+                                  .bumpScore ??
+                              (0, 0);
+                          return _kv(
+                            'Speed bumps predicted / felt',
+                            '${score.$1} / ${score.$2}',
+                          );
+                        }),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'The bump counter is the one place the stack scores '
+                          'its own claims: every bump it committed to, and '
+                          'how many of them the IMU actually felt on the way '
+                          'over. Nothing reads it — it is there so the '
+                          'detector can be judged rather than believed.',
+                          style: HudTheme.caption,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
                 const SectionHeader('Tracks'),
                 Card(
                   child: Padding(

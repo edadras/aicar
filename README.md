@@ -27,6 +27,8 @@ are tuned for it), Android 8.0+ / arm64.
 Camera ─► Preprocess ─► Object detection ─► Tracking ─┐
                     ├─► Segmentation ─► Drivable area ─┤
                     ├─► Lane detection ─► Road edges ──┤
+                    ├─► Road markings ─► Junction ─────┤
+                    ├─► Signs + lights ► Rules in force┤
                     └─► Depth ─────────► Depth fusion ─┤
                                                        ▼
 IMU + GPS ─► Ego motion ──────────────────────► World model
@@ -50,10 +52,36 @@ On a live drive the HUD shows, over the camera image:
 - the drivable corridor as a translucent overlay;
 - the planned path as a corridor with a centreline;
 - traffic signs and traffic lights, with whether each one governs *our* lane;
+- crossings, stop lines and speed bumps drawn as the metric patch of road
+  they occupy, with distance and confidence;
+- the inferred junction, as a dashed line across the road, labelled with what
+  governs it and what the inference was based on;
 - a hazard banner, and the decision with its reason and confidence.
 
 Along the bottom: `SPEED`, `STEERING`, `THROTTLE`, `BRAKE`, and a steering
-wheel that turns with the simulated command.
+wheel that turns with the simulated command. Down the left, the simulated
+indicators blink when the stack would be signalling, with the reason next to
+them.
+
+### Reading the road
+
+The stack does not only avoid things — it reads the road the way a driver
+does, and says what it read:
+
+| | What it does | How |
+|---|---|---|
+| **Speed limit** | Reads the number off the sign, holds it for the next 800 m, and decays its confidence with distance travelled | Sign shape and colour, then digit template matching; adopted only after repeated consistent readings |
+| **Pedestrian crossing** | Eases off on approach; yields outright when someone is on it or at its edge | Zebra stripes in bird's-eye view |
+| **Speed bump** | Eases down to about 20 km/h before it | Transverse bands in bird's-eye view; the IMU then scores whether the jolt was really there |
+| **Stop line** | Treated as evidence of a junction, never as an obligation on its own | A single solid bar across the road |
+| **Red light** | Stops, then waits | Colour and position, plus whether the head governs *our* path |
+| **Junction** | Slows on approach; slows more for an uncontrolled one, and more again for crossing traffic | Several weak cues combined: paint, signal heads, signs, markings that stop while the asphalt continues, road widening, vehicles crossing our path |
+| **Indicating** | Signals *before* the manoeuvre, holds it through, cancels when it is done | The decision state, the route's next turn, and the planner's lateral offset |
+
+Everything in that table carries a confidence and an explanation, and the
+explanation names the evidence: *"UNCONTROLLED junction in 24 m — stop line
+at 26 m"*. See [docs/ROAD_RULES.md](docs/ROAD_RULES.md) for how each one is
+detected and, more usefully, where each one fails.
 
 ---
 
@@ -207,6 +235,8 @@ test/            190+ tests over geometry, perception, planning and replay
 - [docs/SAFETY.md](docs/SAFETY.md) — the simulation-only contract and how it is
   enforced.
 - [docs/MODELS.md](docs/MODELS.md) — installing, exporting and describing models.
+- [docs/ROAD_RULES.md](docs/ROAD_RULES.md) — speed limits, crossings, speed
+  bumps, junctions and indicating: how each is read and where each fails.
 - [docs/CONFIDENCE.md](docs/CONFIDENCE.md) — what every confidence number means.
 - [docs/PHASES.md](docs/PHASES.md) — the fourteen development phases, each
   independently runnable.

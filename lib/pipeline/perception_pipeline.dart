@@ -30,13 +30,18 @@ import '../planning/planned_path.dart';
 import '../road/birds_eye_view.dart';
 import '../road/drivable_area_builder.dart';
 import '../road/lane.dart';
+import '../road/intersection_detector.dart';
 import '../road/no_lane_corridor.dart';
 import '../road/road_edge_detector.dart';
+import '../road/road_marking.dart';
+import '../road/road_marking_detector.dart';
+import '../road/road_marking_tracker.dart';
 import '../road/road_segmentation.dart';
 import '../sensors/ego_motion.dart';
 import '../simulation/bicycle_model.dart';
 import '../simulation/simulated_control.dart';
 import '../simulation/simulated_vehicle_controller.dart';
+import '../simulation/turn_signal_planner.dart';
 import '../simulation/vehicle_state.dart';
 import '../tracking/multi_object_tracker.dart';
 import '../tracking/object_track.dart';
@@ -76,6 +81,10 @@ class PerceptionPipeline {
     CollisionPredictor? collisionPredictor,
     WorldModelBuilder? worldModelBuilder,
     RegulatoryContextTracker? regulatoryTracker,
+    RoadMarkingDetector? roadMarkingDetector,
+    RoadMarkingTracker? roadMarkingTracker,
+    IntersectionDetector? intersectionDetector,
+    TurnSignalPlanner? turnSignalPlanner,
     SimulatedVehicleController? controller,
     KinematicBicycleModel? vehicleModel,
   })  : config = config ?? const PipelineConfig(),
@@ -91,6 +100,12 @@ class PerceptionPipeline {
         worldModelBuilder = worldModelBuilder ?? const WorldModelBuilder(),
         regulatoryTracker =
             regulatoryTracker ?? RegulatoryContextTracker(),
+        roadMarkingDetector =
+            roadMarkingDetector ?? RoadMarkingDetector(),
+        roadMarkingTracker = roadMarkingTracker ?? RoadMarkingTracker(),
+        intersectionDetector =
+            intersectionDetector ?? const IntersectionDetector(),
+        turnSignalPlanner = turnSignalPlanner ?? TurnSignalPlanner(),
         vehicleModel = vehicleModel ??
             KinematicBicycleModel(
               parameters: (config ?? const PipelineConfig()).vehicle,
@@ -125,6 +140,10 @@ class PerceptionPipeline {
   final CollisionPredictor collisionPredictor;
   final WorldModelBuilder worldModelBuilder;
   final RegulatoryContextTracker regulatoryTracker;
+  final RoadMarkingDetector roadMarkingDetector;
+  final RoadMarkingTracker roadMarkingTracker;
+  final IntersectionDetector intersectionDetector;
+  final TurnSignalPlanner turnSignalPlanner;
   final SimulatedVehicleController controller;
   final KinematicBicycleModel vehicleModel;
 
@@ -141,6 +160,7 @@ class PerceptionPipeline {
   int? _lastGoodLanesMicros;
   List<TrafficSign> _lastSigns = const <TrafficSign>[];
   List<TrafficLight> _lastLights = const <TrafficLight>[];
+  double _lastMarkingUpdateMeters = 0;
 
   PlannedPath? _lastPath;
   VehicleState _vehicleState = VehicleState.stationary();
@@ -339,6 +359,42 @@ class PerceptionPipeline {
       tracks = tracker.activeTracks;
     }
 
+    // --- 9b. road markings ------------------------------------------------
+    //
+    // Stop lines, crossings and speed bumps. Run after the lanes because the
+    // marking tracker wants the same ego motion the rest of the frame used,
+    // and before the signs so the junction inference can weigh both.
+    RoadMarkingResult markingResult = RoadMarkingResult.none(
+      frameId: frame.id,
+      timestampMicros: frame.timestampMicros,
+    );
+    if (config.toggles.roadMarkings) {
+      if (config.cadence.shouldRun(
+        config.cadence.markingsEveryNFrames,
+        _frameIndex,
+      )) {
+        markingResult = profiler.measure(
+          PipelineStageNames.roadMarkings,
+          () => roadMarkingDetector.detect(frame, lanes: lanes),
+        );
+        if (markingResult.isDegraded) {
+          degraded.add('road markings: ${markingResult.degradedReason}');
+        }
+      }
+      // The tracker runs every frame regardless: it is what carries a
+      // marking towards us between detections, and skipping it would make
+      // the distances stale exactly when they matter most.
+      final double travelled =
+          regulatoryTracker.odometerMeters - _lastMarkingUpdateMeters;
+      _lastMarkingUpdateMeters = regulatoryTracker.odometerMeters;
+      roadMarkingTracker.update(
+        result: markingResult,
+        travelledMeters: travelled,
+        verticalAccelMps2: ego.verticalAccelMps2,
+      );
+    }
+    final List<RoadMarking> markings = roadMarkingTracker.upcoming;
+
     // --- 10. signs and lights --------------------------------------------
     List<TrafficSign> signs = _lastSigns;
     if (config.toggles.trafficSigns &&
@@ -371,6 +427,19 @@ class PerceptionPipeline {
     regulatoryTracker.observeSigns(signs);
     regulatoryTracker.observeLights(lights);
 
+    // --- 10b. junction inference -------------------------------------------
+    final IntersectionEstimate? intersection = config.toggles.roadMarkings
+        ? intersectionDetector.detect(
+            lanes: lanes,
+            drivableArea: drivableArea,
+            markings: markings,
+            lights: lights,
+            regulatory: regulatoryTracker.context,
+            tracks: tracks,
+            egoSpeedMps: ego.speedMps,
+          )
+        : null;
+
     // --- 11. world model (first pass) ------------------------------------
     WorldState world = profiler.measure(
       PipelineStageNames.worldModel,
@@ -386,6 +455,8 @@ class PerceptionPipeline {
         signs: signs,
         lights: lights,
         regulatory: regulatoryTracker.context,
+        roadMarkings: markings,
+        intersection: intersection,
         corridor: corridor,
         routeProgress: routeProgress,
         depth: depth,
@@ -442,6 +513,8 @@ class PerceptionPipeline {
           signs: signs,
           lights: lights,
           regulatory: regulatoryTracker.context,
+          roadMarkings: markings,
+          intersection: intersection,
           corridor: corridor,
           routeProgress: routeProgress,
           depth: depth,
@@ -486,6 +559,16 @@ class PerceptionPipeline {
           decision: decision,
           simulated: _vehicleState,
         );
+        // Indicating is decided from the manoeuvre, not from the steering
+        // angle: the lamp has to come on before the wheel moves.
+        command = command.copyWith(
+          turnSignal: turnSignalPlanner.update(
+            world: world,
+            decision: decision,
+            path: path,
+            dtSeconds: dt,
+          ),
+        );
         _vehicleState = controller.advanceSimulation(
           model: vehicleModel,
           state: _vehicleState,
@@ -528,6 +611,7 @@ class PerceptionPipeline {
       (tracker as MultiObjectTracker).calibration = frame.calibration;
     }
     _bev = null;
+    roadMarkingDetector.invalidate();
   }
 
   BirdsEyeView _ensureBev(CameraFrame frame) {
@@ -651,6 +735,9 @@ class PerceptionPipeline {
     decisionEngine.reset();
     controller.reset();
     regulatoryTracker.reset();
+    roadMarkingTracker.reset();
+    roadMarkingDetector.invalidate();
+    turnSignalPlanner.reset();
     profiler.reset();
     _bev = null;
     _frameIndex = 0;
@@ -662,6 +749,7 @@ class PerceptionPipeline {
     _lastGoodLanesMicros = null;
     _lastSigns = const <TrafficSign>[];
     _lastLights = const <TrafficLight>[];
+    _lastMarkingUpdateMeters = 0;
     _lastPath = null;
     _vehicleState = VehicleState.stationary();
     _distanceMemory.clear();

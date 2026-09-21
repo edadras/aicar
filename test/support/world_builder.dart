@@ -1,10 +1,15 @@
 import 'package:aicar/camera/camera_calibration.dart';
 import 'package:aicar/core/confidence.dart';
 import 'package:aicar/core/geometry.dart';
+import 'package:aicar/navigation/maneuver.dart';
+import 'package:aicar/navigation/route.dart';
 import 'package:aicar/perception/object_class.dart';
+import 'package:aicar/planning/planned_path.dart';
 import 'package:aicar/perception/traffic_light.dart';
 import 'package:aicar/perception/traffic_sign.dart';
+import 'package:aicar/road/intersection_detector.dart';
 import 'package:aicar/road/lane.dart';
+import 'package:aicar/road/road_marking.dart';
 import 'package:aicar/road/road_segmentation.dart';
 import 'package:aicar/sensors/ego_motion.dart';
 import 'package:aicar/tracking/object_track.dart';
@@ -161,6 +166,8 @@ WorldState testWorld({
   List<TrafficSign> signs = const <TrafficSign>[],
   List<TrafficLight> lights = const <TrafficLight>[],
   RegulatoryContext regulatory = const RegulatoryContext(),
+  List<RoadMarking> roadMarkings = const <RoadMarking>[],
+  IntersectionEstimate? intersection,
   List<Hazard> hazards = const <Hazard>[],
   AutonomyConfidence? autonomy,
   List<String> degraded = const <String>[],
@@ -179,6 +186,8 @@ WorldState testWorld({
       trafficSigns: signs,
       trafficLights: lights,
       regulatory: regulatory,
+      roadMarkings: roadMarkings,
+      intersection: intersection,
       hazards: hazards,
       autonomy: autonomy ??
           AutonomyConfidence.compute(
@@ -191,3 +200,110 @@ WorldState testWorld({
       ambientLuminance: ambientLuminance,
       degradedSubsystems: degraded,
     );
+
+/// A confirmed road marking at a known distance.
+RoadMarking testMarking({
+  required RoadMarkingType type,
+  required double distanceMeters,
+  double depthMeters = 3.0,
+  double widthMeters = 6.0,
+  double lateralCenterMeters = 0,
+  double confidence = 0.8,
+  int observationCount = 5,
+}) =>
+    RoadMarking(
+      type: type,
+      distanceMeters: distanceMeters,
+      depthMeters: depthMeters,
+      lateralCenterMeters: lateralCenterMeters,
+      widthMeters: widthMeters,
+      confidence: Confidence(confidence),
+      frameId: 1,
+      timestampMicros: 0,
+      observationCount: observationCount,
+    );
+
+/// A straight planned path, optionally offset from the lane centre.
+PlannedPath testPath({
+  double lateralOffset = 0,
+  PathSource source = PathSource.laneCenterline,
+  double confidence = 0.8,
+  double range = 30,
+  // High by default so the path's own curvature limit never quietly becomes
+  // the reason a test's decision came out the way it did.
+  double targetSpeedMps = 25,
+}) =>
+    PlannedPath(
+      points: <PathPoint>[
+        for (double d = 0; d <= range; d += 5)
+          PathPoint(
+            position: Vec2(lateralOffset, d),
+            distanceAlong: d,
+            headingRadians: 0,
+            curvature: 0,
+            targetSpeedMps: targetSpeedMps,
+            lateralClearance: 1.75,
+          ),
+      ],
+      curve: Polynomial(<double>[lateralOffset, 0, 0]),
+      source: source,
+      confidence: confidence,
+      lateralOffsetFromReference: lateralOffset,
+      maxRangeMeters: range,
+      frameId: 1,
+      timestampMicros: 0,
+    );
+
+/// Route progress carrying a given intent at a given distance.
+///
+/// The route itself is a stub: nothing under test reads its geometry, only
+/// the intent and the distance, which is exactly the separation the
+/// navigation layer is designed around.
+RouteProgress testRouteProgress({
+  required ManeuverIntent intent,
+  required double distanceToManeuverMeters,
+  double matchQuality = 0.8,
+  int? mapSpeedLimitKph,
+}) {
+  const GeoPosition here = GeoPosition(
+    latitude: 0,
+    longitude: 0,
+    accuracyMeters: 5,
+    timestampMicros: 0,
+  );
+  final ManeuverType maneuver = switch (intent) {
+    ManeuverIntent.turnLeft => ManeuverType.turnLeft,
+    ManeuverIntent.turnRight => ManeuverType.turnRight,
+    ManeuverIntent.keepLeft => ManeuverType.keepLeft,
+    ManeuverIntent.keepRight => ManeuverType.keepRight,
+    ManeuverIntent.exit => ManeuverType.offRamp,
+    _ => ManeuverType.straight,
+  };
+  return RouteProgress(
+    route: NavigationRoute(
+      origin: here,
+      destination: here,
+      steps: <RouteStep>[
+        RouteStep(
+          maneuver: maneuver,
+          polyline: const <GeoPosition>[here],
+          distanceMeters: distanceToManeuverMeters,
+          durationSeconds: 10,
+        ),
+      ],
+      totalDistanceMeters: distanceToManeuverMeters,
+      totalDurationSeconds: 10,
+      computedAt: DateTime.fromMillisecondsSinceEpoch(0),
+      source: 'test',
+    ),
+    currentStepIndex: 0,
+    distanceToManeuverMeters: distanceToManeuverMeters,
+    distanceRemainingMeters: distanceToManeuverMeters,
+    durationRemainingSeconds: 10,
+    nextManeuver: maneuver,
+    roadBearingDegrees: 0,
+    isOffRoute: false,
+    matchQuality: matchQuality,
+    mapSpeedLimitKph: mapSpeedLimitKph,
+  );
+}
