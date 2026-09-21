@@ -32,6 +32,9 @@ class RoadMarkingConfig {
     this.maxStripeWidthMeters = 0.90,
     this.brightRowFraction = 0.55,
     this.minClassGap = 28.0,
+    this.saturationLuma = 250,
+    this.maxSaturatedFraction = 0.12,
+    this.maxAmbiguousColumnFraction = 0.35,
   });
 
   final double minForwardMeters;
@@ -68,6 +71,27 @@ class RoadMarkingConfig {
   /// holds nothing but sensor noise; this is what stops clean asphalt from
   /// reading as a marking.
   final double minClassGap;
+
+  /// At or above this, a pixel is clipped and carries no information.
+  final int saturationLuma;
+
+  /// Fraction of the searched area that may be clipped before the frame is
+  /// reported unusable rather than analysed.
+  ///
+  /// A low sun blows out a large patch of road, and inside it paint and sky
+  /// and tarmac are all the same number. Returning "no markings" from that
+  /// would be a lie of the most dangerous kind — it is not that there are
+  /// none, it is that we cannot see.
+  final double maxSaturatedFraction;
+
+  /// How ragged a stripe pattern may be and still count as a crossing.
+  ///
+  /// A zebra's bars run along the direction of travel, so in bird's-eye space
+  /// the *same columns* are bright in every row of the crossing. Specular
+  /// reflections on wet tarmac are bright, road-coloured and roughly the
+  /// right size, but they are scattered — the bright columns change from row
+  /// to row. Measuring that is what separates a crossing from a rainstorm.
+  final double maxAmbiguousColumnFraction;
 }
 
 /// Finds transverse road markings — stop lines, crosswalks and speed bumps —
@@ -151,6 +175,16 @@ class RoadMarkingDetector {
         : ImagePreprocessing.rgbToGray(frame.bytes, frame.width, frame.height);
     final Uint8List warped = bev.warpGray(gray, frame.width, frame.height);
 
+    final double saturated = _saturatedFraction(warped, bev);
+    if (saturated > config.maxSaturatedFraction) {
+      return RoadMarkingResult.unavailable(
+        frameId: frame.id,
+        timestampMicros: frame.timestampMicros,
+        reason: '${(saturated * 100).round()}% of the road surface is '
+            'blown out — paint, sky and tarmac are the same number in there',
+      );
+    }
+
     final _RowProfile profile = _profileRows(warped, bev);
     if (profile.usableRows < 8) {
       return RoadMarkingResult.unavailable(
@@ -186,6 +220,20 @@ class RoadMarkingDetector {
     );
   }
 
+  /// Fraction of the visible road surface that is clipped.
+  double _saturatedFraction(Uint8List warped, BirdsEyeView bev) {
+    int valid = 0;
+    int clipped = 0;
+    for (int row = 0; row < bev.height; row++) {
+      for (int col = 0; col < bev.width; col++) {
+        if (!bev.isValid(col, row)) continue;
+        valid++;
+        if (warped[row * bev.width + col] >= config.saturationLuma) clipped++;
+      }
+    }
+    return valid == 0 ? 0 : clipped / valid;
+  }
+
   // --- Row analysis -------------------------------------------------------
 
   /// Reduce the warped grid to one descriptor per row.
@@ -215,6 +263,7 @@ class RoadMarkingDetector {
     final Int32List firstBrightCol = Int32List(h)..fillRange(0, h, -1);
     final Int32List lastBrightCol = Int32List(h)..fillRange(0, h, -1);
     final Uint8List rowUsable = Uint8List(h);
+    final Uint8List brightMask = Uint8List(w * h);
 
     final int minRunPixels =
         math.max(2, (0.12 / bev.metresPerPixelLateral).round());
@@ -275,6 +324,7 @@ class RoadMarkingDetector {
             bev.isValid(col, row) && warped[row * w + col] > threshold;
         if (isBright) {
           bright++;
+          brightMask[row * w + col] = 1;
           if (firstBrightCol[row] < 0) firstBrightCol[row] = col;
           lastBrightCol[row] = col;
         }
@@ -314,6 +364,7 @@ class RoadMarkingDetector {
       medianStripeMeters: medianStripe,
       firstBrightCol: firstBrightCol,
       lastBrightCol: lastBrightCol,
+      brightMask: brightMask,
       usable: rowUsable,
       usableRows: usable,
       farthestUsableForward: farthest,
@@ -391,6 +442,18 @@ class RoadMarkingDetector {
       // hatched median or a bus-stop box, not a crossing.
       if (widthMeters < 1.8) continue;
 
+      // The stripes have to be *the same stripes* down the whole crossing.
+      // A zebra's bars run along the direction of travel, so the same
+      // columns are bright in every row of it. Wet tarmac reflecting street
+      // lights produces bright patches of the right size and spacing, but
+      // scattered — different columns in every row. Without this test a
+      // rainstorm reads as a pedestrian crossing, which is precisely the
+      // false positive that would have the stack braking for nothing on the
+      // worst night to be braking for nothing.
+      final double ambiguous =
+          _ambiguousColumnFraction(p, bev, start, end, left, right);
+      if (ambiguous > config.maxAmbiguousColumnFraction) continue;
+
       final double agreement = agreeing / span;
       final double stripeStrength = clampDouble(
         (transitionSum / agreeing) / (config.minCrosswalkTransitions * 2),
@@ -417,6 +480,41 @@ class RoadMarkingDetector {
     }
 
     return out;
+  }
+
+  /// How many columns of a candidate crossing are neither reliably bright
+  /// nor reliably dark down its length.
+  ///
+  /// A zebra gives a strongly bimodal profile — a column is either a stripe
+  /// or a gap, in every row. Scattered reflections give a flat one.
+  double _ambiguousColumnFraction(
+    _RowProfile p,
+    BirdsEyeView bev,
+    int startRow,
+    int endRow,
+    int leftCol,
+    int rightCol,
+  ) {
+    final int rows = endRow - startRow + 1;
+    if (rows < 3 || rightCol <= leftCol) return 1;
+
+    int considered = 0;
+    int ambiguous = 0;
+    for (int col = leftCol; col <= rightCol; col++) {
+      int brightRows = 0;
+      int validRows = 0;
+      for (int row = startRow; row <= endRow; row++) {
+        if (!bev.isValid(col, row)) continue;
+        validRows++;
+        if (p.brightMask[row * bev.width + col] == 1) brightRows++;
+      }
+      if (validRows < rows * 0.5) continue;
+      considered++;
+      final double rate = brightRows / validRows;
+      if (rate > 0.25 && rate < 0.75) ambiguous++;
+    }
+    if (considered == 0) return 1;
+    return ambiguous / considered;
   }
 
   // --- Solid transverse bands: stop lines and speed bumps -----------------
@@ -590,6 +688,7 @@ class _RowProfile {
     required this.medianStripeMeters,
     required this.firstBrightCol,
     required this.lastBrightCol,
+    required this.brightMask,
     required this.usable,
     required this.usableRows,
     required this.farthestUsableForward,
@@ -601,6 +700,13 @@ class _RowProfile {
   final Float32List medianStripeMeters;
   final Int32List firstBrightCol;
   final Int32List lastBrightCol;
+
+  /// One byte per grid cell: 1 where the cell was above its row's threshold.
+  /// Kept so a candidate crossing's stripes can be checked for consistency
+  /// *between* rows, which is what a real zebra has and scattered
+  /// reflections do not.
+  final Uint8List brightMask;
+
   final Uint8List usable;
   final int usableRows;
   final double farthestUsableForward;

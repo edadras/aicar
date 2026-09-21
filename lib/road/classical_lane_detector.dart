@@ -28,6 +28,7 @@ class ClassicalLaneConfig {
     this.ransacIterations = 48,
     this.ransacInlierMeters = 0.18,
     this.temporalSmoothing = 0.45,
+    this.strongResponseLuma = 110,
   });
 
   /// Typical painted-line width. The matched filter is tuned to this, which is
@@ -56,6 +57,11 @@ class ClassicalLaneConfig {
   /// Blend factor with the previous frame's fit. Lanes are physically
   /// continuous; a fit that jumps between frames is noise, not a new road.
   final double temporalSmoothing;
+
+  /// Matched-filter response, in luma, at which the evidence counts as
+  /// unambiguous. Fresh white paint on dry tarmac in daylight is well above
+  /// this; the same paint at night, past the headlights, is nowhere near it.
+  final double strongResponseLuma;
 }
 
 /// Lane detector built from classical computer vision, requiring no weights.
@@ -168,9 +174,13 @@ class ClassicalLaneDetector extends LaneDetector {
     }
 
     final _LaneTrace? leftTrace =
-        leftSeed == null ? null : _slidingWindow(mask, bev, leftSeed);
+        leftSeed == null
+            ? null
+            : _slidingWindow(mask, bev, leftSeed, response: response);
     final _LaneTrace? rightTrace =
-        rightSeed == null ? null : _slidingWindow(mask, bev, rightSeed);
+        rightSeed == null
+            ? null
+            : _slidingWindow(mask, bev, rightSeed, response: response);
 
     LaneBoundary? left = _fitBoundary(
       leftTrace,
@@ -197,7 +207,8 @@ class ClassicalLaneDetector extends LaneDetector {
     ];
 
     // Adjacent lanes: search outward from each ego boundary by one lane width.
-    boundaries.addAll(_findAdjacent(mask, bev, frame, left, right));
+    boundaries.addAll(
+        _findAdjacent(mask, response, bev, frame, left, right));
 
     final LaneMode mode = switch ((left, right)) {
       (final LaneBoundary _, final LaneBoundary _) => LaneMode.bothBoundaries,
@@ -341,7 +352,12 @@ class ClassicalLaneDetector extends LaneDetector {
 
   // --- Step 5: sliding window --------------------------------------------
 
-  _LaneTrace? _slidingWindow(Uint8List mask, BirdsEyeView bev, int seedColumn) {
+  _LaneTrace? _slidingWindow(
+    Uint8List mask,
+    BirdsEyeView bev,
+    int seedColumn, {
+    Uint8List? response,
+  }) {
     final int windows = config.slidingWindowCount;
     final int windowHeight = math.max(1, bev.height ~/ windows);
     final int halfWidth = math.max(
@@ -356,6 +372,8 @@ class ClassicalLaneDetector extends LaneDetector {
 
     int current = seedColumn;
     int consecutiveEmpty = 0;
+    int responseTotal = 0;
+    int responsePoints = 0;
 
     // Start at the bottom (near field) and climb.
     for (int w = 0; w < windows; w++) {
@@ -365,6 +383,7 @@ class ClassicalLaneDetector extends LaneDetector {
 
       int sum = 0;
       int count = 0;
+      int responseSum = 0;
       for (int row = rowStart; row < rowEnd; row++) {
         final int base = row * bev.width;
         final int from = math.max(0, current - halfWidth);
@@ -373,6 +392,7 @@ class ClassicalLaneDetector extends LaneDetector {
           if (mask[base + col] == 1) {
             sum += col;
             count++;
+            if (response != null) responseSum += response[base + col];
           }
         }
       }
@@ -387,6 +407,10 @@ class ClassicalLaneDetector extends LaneDetector {
         // carry more weight in the fit.
         weights.add(1.0 + 2.0 * (rowCentre / bev.height));
         rowsWithSupport.add(w);
+        if (response != null) {
+          responseTotal += responseSum;
+          responsePoints += count;
+        }
         consecutiveEmpty = 0;
       } else {
         consecutiveEmpty++;
@@ -405,6 +429,7 @@ class ClassicalLaneDetector extends LaneDetector {
           ? windows
           : rowsWithSupport.last + 1),
       windowsWithSupport: rowsWithSupport.length,
+      meanResponse: responsePoints == 0 ? 0 : responseTotal / responsePoints,
     );
   }
 
@@ -518,10 +543,28 @@ class ClassicalLaneDetector extends LaneDetector {
     final double rangeScore = clampDouble(rangeMeters / 25.0, 0, 1);
     final double coverageScore = clampDouble(bevCoverage / 0.5, 0, 1);
 
-    double c = 0.35 * residualScore +
-        0.25 * supportScore +
-        0.25 * rangeScore +
-        0.15 * coverageScore;
+    // Signal strength: how far the paint actually stood above the road beside
+    // it, in luma.
+    //
+    // Without this term the confidence measured only the *quantity* of
+    // evidence — how many points, over how long a range, how well they fit a
+    // curve — and none of its *quality*. A lane traced from markings barely
+    // 25 luma above a noisy night image scored exactly the same as one from
+    // markings 150 luma above clean daylight tarmac, which is a stack
+    // claiming to be as sure at night as it is at noon. It is not, and now it
+    // does not say it is.
+    final double signalScore = clampDouble(
+      (trace.meanResponse - config.minMarkingResponse) /
+          (config.strongResponseLuma - config.minMarkingResponse),
+      0,
+      1,
+    );
+
+    double c = 0.28 * residualScore +
+        0.18 * supportScore +
+        0.20 * rangeScore +
+        0.12 * coverageScore +
+        0.22 * signalScore;
 
     // An uncalibrated camera means the metric geometry is a guess, and every
     // metric claim built on it inherits that doubt.
@@ -569,6 +612,7 @@ class ClassicalLaneDetector extends LaneDetector {
   /// Search one lane width outward for the adjacent lanes' outer boundaries.
   List<LaneBoundary> _findAdjacent(
     Uint8List mask,
+    Uint8List response,
     BirdsEyeView bev,
     CameraFrame frame,
     LaneBoundary? left,
@@ -585,7 +629,8 @@ class ClassicalLaneDetector extends LaneDetector {
       final int seed = bev.columnAtLateral(expected).round();
       if (seed < 2 || seed >= bev.width - 2) return;
 
-      final _LaneTrace? trace = _slidingWindow(mask, bev, seed);
+      final _LaneTrace? trace =
+          _slidingWindow(mask, bev, seed, response: response);
       if (trace == null || trace.lateral.length < 4) return;
 
       final LaneBoundary? boundary = _fitBoundary(
@@ -683,6 +728,7 @@ class _LaneTrace {
     required this.weights,
     required this.windowsSearched,
     required this.windowsWithSupport,
+    this.meanResponse = 0,
   });
 
   final List<double> lateral;
@@ -690,4 +736,9 @@ class _LaneTrace {
   final List<double> weights;
   final int windowsSearched;
   final int windowsWithSupport;
+
+  /// Mean matched-filter response at the supported points: how far the paint
+  /// stood above the road beside it, in luma. The evidence's *strength*, as
+  /// opposed to its quantity.
+  final double meanResponse;
 }

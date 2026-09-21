@@ -258,6 +258,8 @@ test/            190+ tests over geometry, perception, planning and replay
 - [docs/MODELS.md](docs/MODELS.md) — installing, exporting and describing models.
 - [docs/ROAD_RULES.md](docs/ROAD_RULES.md) — speed limits, crossings, speed
   bumps, junctions and indicating: how each is read and where each fails.
+- [docs/FIELD_TESTING.md](docs/FIELD_TESTING.md) — what the synthetic suite
+  settles, what it cannot, and what to drive.
 - [docs/CONFIDENCE.md](docs/CONFIDENCE.md) — what every confidence number means.
 - [docs/PHASES.md](docs/PHASES.md) — the fourteen development phases, each
   independently runnable.

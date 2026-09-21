@@ -8,6 +8,7 @@ import '../core/confidence.dart';
 import '../core/geometry.dart';
 import 'detection.dart';
 import 'object_class.dart';
+import 'signal_relevance.dart';
 import 'traffic_light.dart';
 
 /// Classifies the illuminated aspect of a detected traffic light, and decides
@@ -70,6 +71,20 @@ class TrafficLightRecognizer extends TrafficLightDetector {
   Polynomial? egoPathCenterline;
   double egoLaneHalfWidth = 1.75;
 
+  /// Distance to the junction the stack believes is ahead, and how sure it
+  /// is. Set by the pipeline from the intersection estimate.
+  ///
+  /// This is the single biggest improvement available to relevance. A signal
+  /// head only governs an approach to a junction, so knowing where the
+  /// junction is turns "how far off my path is it?" — which a head mounted
+  /// on a gantry over the cross street can easily pass — into "does it belong
+  /// to the junction I am approaching?", which it cannot.
+  double? junctionDistanceMeters;
+  double junctionConfidence = 0;
+
+  static const SignalRelevanceResolver _relevanceResolver =
+      SignalRelevanceResolver();
+
   @override
   Future<List<TrafficLight>> detectLights(
     CameraFrame frame, {
@@ -109,6 +124,8 @@ class TrafficLightRecognizer extends TrafficLightDetector {
         lateralOffset: lateral,
         distance: distance,
         boxHeightPx: boxHeightPx,
+        aspectRatio: analysis.aspectRatio,
+        memory: memory,
       );
 
       out.add(TrafficLight(
@@ -315,44 +332,42 @@ class TrafficLightRecognizer extends TrafficLightDetector {
 
   /// Does this signal govern us?
   ///
-  /// The honest answer is often "unknown", and saying so is important: a
-  /// system that confidently attributes the cross street's red light to its
-  /// own lane would brake in the middle of a junction.
+  /// Delegated to [SignalRelevanceResolver], which is where the reasoning
+  /// lives and where it can be tested without rendering a traffic light.
   (TrafficLightRelevance, double) _resolveRelevance({
     required double? lateralOffset,
     required double? distance,
     required double boxHeightPx,
+    required double aspectRatio,
+    required _LightMemory memory,
   }) {
     if (lateralOffset == null || distance == null) {
       return (TrafficLightRelevance.unknown, 0.2);
     }
 
-    // Where will our own path be at that distance?
-    final double pathLateral =
-        egoPathCenterline?.evaluate(distance) ?? 0.0;
-    final double offsetFromPath = lateralOffset - pathLateral;
+    final double pathLateral = egoPathCenterline?.evaluate(distance) ?? 0.0;
+    final RelevanceVerdict verdict = _relevanceResolver.resolve(
+      RelevanceEvidence(
+        lateralOffsetMeters: lateralOffset,
+        distanceMeters: distance,
+        pathLateralAtDistance: pathLateral,
+        egoLaneHalfWidth: egoLaneHalfWidth,
+        boxHeightPixels: boxHeightPx,
+        aspectRatio: aspectRatio,
+        lateralDriftPerMetre: memory.lateralDriftPerMetre(
+          offsetFromPath: lateralOffset - pathLateral,
+          distance: distance,
+        ),
+        junctionDistanceMeters: junctionDistanceMeters,
+        junctionConfidence: junctionConfidence,
+      ),
+    );
 
-    // Signals governing a lane are mounted above it or on a post just beyond
-    // its edge. Tolerance widens with distance because both the range estimate
-    // and the path prediction get looser.
-    final double tolerance =
-        egoLaneHalfWidth + 2.0 + clampDouble(distance / 25, 0, 3.0);
-
-    if (offsetFromPath.abs() <= tolerance) {
-      // Small, distant signals are exactly the ones we are least sure about.
-      final double sizeQuality = clampDouble((boxHeightPx - 8) / 20, 0, 1);
-      final double centrality =
-          clampDouble(1 - offsetFromPath.abs() / tolerance, 0, 1);
-      return (
-        TrafficLightRelevance.egoPath,
-        clampDouble(0.3 + 0.4 * centrality + 0.3 * sizeQuality, 0, 0.95),
-      );
-    }
-
-    if (offsetFromPath.abs() > tolerance * 2.2) {
-      return (TrafficLightRelevance.otherPath, 0.7);
-    }
-    return (TrafficLightRelevance.unknown, 0.3);
+    return switch (verdict.governsEgo) {
+      true => (TrafficLightRelevance.egoPath, verdict.confidence),
+      false => (TrafficLightRelevance.otherPath, verdict.confidence),
+      null => (TrafficLightRelevance.unknown, verdict.confidence),
+    };
   }
 
   /// Track signal heads across frames by box overlap so that colour stability
@@ -427,6 +442,31 @@ class _LightMemory {
   TrafficLightColor lastColor = TrafficLightColor.unknown;
   int observations = 0;
   int stableFrames = 0;
+
+  double? _lastOffsetFromPath;
+  double? _lastDistance;
+
+  /// How fast this head is sliding across our path, per metre we close on it.
+  ///
+  /// Zero for a head that governs us — it stays put over our lane as we
+  /// approach. Large for one over the cross street, which sweeps sideways.
+  /// Returns null until there is a previous observation far enough back to
+  /// divide by.
+  double? lateralDriftPerMetre({
+    required double offsetFromPath,
+    required double distance,
+  }) {
+    final double? priorOffset = _lastOffsetFromPath;
+    final double? priorDistance = _lastDistance;
+    _lastOffsetFromPath = offsetFromPath;
+    _lastDistance = distance;
+
+    if (priorOffset == null || priorDistance == null) return null;
+    final double closed = priorDistance - distance;
+    // Only meaningful while actually closing on it.
+    if (closed < 1.0) return null;
+    return (offsetFromPath - priorOffset) / closed;
+  }
 
   void update({required BoundingBox box, required TrafficLightColor color}) {
     this.box = box;

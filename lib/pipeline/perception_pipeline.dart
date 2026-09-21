@@ -812,6 +812,12 @@ class PerceptionPipeline {
           trafficLightDetector as TrafficLightRecognizer;
       r.egoPathCenterline = centerline;
       r.egoLaneHalfWidth = world.lanes.laneWidthMeters / 2;
+      // A signal head governs an approach to a junction, so knowing where
+      // the junction is turns "how far off my path is it?" into "does it
+      // belong to the junction I am approaching?" — a question a gantry over
+      // the cross street cannot pass.
+      r.junctionDistanceMeters = world.intersection?.distanceMeters;
+      r.junctionConfidence = world.intersection?.confidence.value ?? 0;
     }
     if (trafficSignDetector is TrafficSignRecognizer) {
       (trafficSignDetector as TrafficSignRecognizer).egoPathCenterline =
